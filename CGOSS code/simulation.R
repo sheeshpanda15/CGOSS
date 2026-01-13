@@ -1,12 +1,12 @@
 #This R code shows the comparison between different subsample methods on simulated full dataset.
-#People can choose 4 types of generated dataset from CASE1-CASE4
-#People can also choose 3 different setting of random effect: N.ori, N.ML, N.large, T to generate the dataset.
-#People can use "large" or "small" to control the differences between the size of generated groups
+#People can choose 4 types of generated dataset from CASE1-CASE4 by "CASE" in line 23
+#People can also choose 3 different setting of random effect: N.ori, N.ML, T by "modeltype" to generate the dataset.
+#People can use "large" or "small" to control the differences between the size of generated groups.
+#People can use "setted_cluster" to control the cluster number we choose in the algorithm.
 
-
-#The function Comp is the main function that do the comparison between 5 subsample method. 
+#The function Comp is the main function that do the comparison between 5 subsample methods. 
 #People can change the value of "n" to have different size of subsample set.
-#People can change the value of "obj.c" to choose different setting of the objective function.
+
 
 #We use CPP to help speed up the code. People must put 'myoss.cpp','lmm_fast.cpp' to the environment.
 
@@ -20,7 +20,7 @@ library(MASS)
 Rcpp::sourceCpp('myoss.cpp')
 Rcpp::sourceCpp("lmm_fast.cpp")
 
-
+filename<-CASE<-"case1"
 
 iboss=function(x,k){
   ind=NULL
@@ -42,114 +42,6 @@ iboss=function(x,k){
 }
 scalex=function(a){
   2*(a-min(a))/(max(a)-min(a))-1
-}
-find.sigma=function(xx, yy, beta, nc, R){
-  
-  eta.hat<-yy-cbind(1, xx)%*%beta
-  
-  b <- c()
-  Ue <- 0
-  for (i in 1:length(eta.hat)) {
-    b[i] <- sum((eta.hat[i]*rep(1,length(eta.hat)) - eta.hat)^2)/2
-    Ue <- Ue + b[i]
-  }
-  
-  if(length(which(nc==0))!=0){
-    nc <- nc[-which(nc==0)]
-  }
-  R.1 <- length(nc)
-  
-  e1 <- c()
-  for(j in 1:nc[1]) {
-    e1[j] <- sum((eta.hat[1:nc[1]][j]*rep(1,nc[1]) - eta.hat[1:nc[1]])^2)/(2*nc[1])
-  }
-  
-  
-  e <- c()
-  e[1] <- sum(e1)
-  
-  if (R.1 > 1) {  
-    for (i in 2:R.1) {
-      e2 <- c()
-      for (j in 1:nc[i]) {
-        e2[j] <- sum((eta.hat[(sum(nc[1:(i-1)]) + j)]*rep(1,nc[i]) - eta.hat[(sum(nc[1:(i-1)]) + 1):sum(nc[1:i])])^2)/(2*nc[i])
-      }
-      e[i] <- sum(e2)
-    }
-  }
-  
-  
-  Ua <- sum(e)
-  NF <- sum(nc)
-  NS <- sum(nc^2)
-  Var.e <- Ua/(NF-R)
-  if((NF^2-NS)==0){
-    Var.a=0
-  }else{
-    Var.a <- Ue/(NF^2-NS) -  Ua*(NF^2 - NF)/((NF^2 - NS)*(NF-R))
-  }
-  if (Var.a < 0) {
-    Var.a <- 0
-  }
-  
-  
-  
-  
-  return(list(Var.a,Var.e))
-}
-find.beta=function(xx, yy, Var.a, Var.e, nc, R, p){
-  if(length(which(nc==0))!=0){
-    nc <- nc[-which(nc==0)]
-  }
-  R.1 <- length(nc)
-  sn <- c(0, cumsum(nc))
-  
-  
-  XVX <- matrix(0, p+1, p+1)
-  XVY <- matrix(0, p+1, 1)
-  
-  for (i in 1:R.1){
-    gamma <- (nc[i]*Var.a)/(Var.e+nc[i]*Var.a)
-    inv.V <- (1/Var.e)*(diag(1,(nc[i]))-(gamma/(nc[i]))*matrix(1,(nc[i]),(nc[i])))
-    if(nc[i] ==1){
-      XVX <- XVX + t(cbind(1,t(xx[(sn[i]+1):(sn[i+1]),])))%*%inv.V%*%cbind(1,t(xx[(sn[i]+1):(sn[i+1]),]))
-      XVY <- XVY + t(cbind(1,t(xx[(sn[i]+1):(sn[i+1]),])))%*%inv.V%*%yy[(sn[i]+1):(sn[i+1])]
-    }else{
-      XVX <- XVX + t(cbind(1,xx[(sn[i]+1):(sn[i+1]),]))%*%inv.V%*%cbind(1,xx[(sn[i]+1):(sn[i+1]),])
-      XVY <- XVY + t(cbind(1,xx[(sn[i]+1):(sn[i+1]),]))%*%inv.V%*%yy[(sn[i]+1):(sn[i+1])]
-    }
-  }
-  
-  
-  if (det(XVX) == 0) {
-    cat("Nonsingular")
-  }
-  
-  bt<-solve(XVX)%*%XVY
-  
-  return(bt)
-}
-Est_hat=function(xx, yy, beta, Var.a, Var.e, nc, R, p){
-  
-  beta0 <- as.matrix(lm(yy ~ xx)$coefficients)
-  
-  sigma.hat0 <- find_sigma_cpp(xx, yy, beta0, nc, R)
-  
-  beta1 <- find_beta_cpp(xx, yy, sigma.hat0[[1]],sigma.hat0[[2]], nc, R, p)
-  
-  sigma.hat1 <- find_sigma_cpp(xx, yy, beta1, nc, R)
-  
-  
-  beta2 <- find_beta_cpp(xx, yy, sigma.hat1[[1]], sigma.hat1[[2]], nc, R, p)
-  
-  
-  bt.mse <- sum((beta2[-1]-beta)^2)
-  sigma.hat2 <- find_sigma_cpp(xx, yy, beta2, nc, R)
-  bt0.mse <- (beta2[1] - 1)^2
-  va.mse <- sum((sigma.hat2[[1]] - Var.a)^2)
-  ve.mse <- sum((sigma.hat2[[2]] - Var.e)^2)
-  
-  return(list(bt.mse, va.mse, ve.mse, bt0.mse, beta2, sigma.hat2[[1]], sigma.hat2[[2]]))
 }
 MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
   index <- 1
@@ -236,64 +128,6 @@ mbky <- function(setseed, FXX, y, n, Cn) {
               cluster_sizes_vector = cluster_sizes_vector, 
               sorted_indices = sorted_indices))
 }
-count.info=function(xx,yy,nc,R,p){
-  xx <- apply(xx, 2, scalex)
-  
-  if(length(nc)==1){
-    X <- model.matrix(~ xx)
-    model <- lm(yy ~ xx)
-    residuals <- resid(model)
-    RSS <- sum(residuals^2)
-    Var.lm<-RSS/(nrow(X)-p-1)
-    D<-det(t(X) %*% X)/(Var.lm^p)
-    A <- Var.lm*sum(diag(solve( t(X) %*% X)) )
-  }
-  else{
-    
-    
-    
-    beta0 <- as.matrix(lm(yy ~ xx)$coefficients)
-    sigma.hat0 <- find_sigma_cpp(xx, yy, beta0, nc, R)
-    beta1 <- find_beta_cpp(xx, yy, sigma.hat0[[1]],sigma.hat0[[2]], nc, R, p)
-    sigma.hat1 <- find_sigma_cpp(xx, yy, beta1, nc, R)
-    beta2 <- find_beta_cpp(xx, yy, sigma.hat1[[1]], sigma.hat1[[2]], nc, R, p)
-    sigma.hat2 <- find_sigma_cpp(xx, yy, beta2, nc, R)
-    
-    Var.a<-sigma.hat2[[1]]
-    Var.e<-sigma.hat2[[2]]
-    if(length(which(nc==0))!=0){
-      nc <- nc[-which(nc==0)]
-    }
-    R.1 <- length(nc)
-    sn <- c(0, cumsum(nc))
-    
-    
-    XVX <- matrix(0, p+1, p+1)
-    for (i in 1:R.1){
-      
-      gamma <- (nc[i]*Var.a)/(Var.e+nc[i]*Var.a)
-      inv.V <- (1/Var.e)*(diag(1,(nc[i]))-(gamma/(nc[i]))*matrix(1,(nc[i]),(nc[i])))
-      
-      if (any(is.nan(inv.V)) || any(is.infinite(inv.V))) {
-        cat("inv.V  NaN or
-            Inf\n")
-      }
-      
-      if(nc[i] ==1){
-        XVX <- XVX + t(cbind(1,t(xx[(sn[i]+1):(sn[i+1]),])))%*%inv.V%*%cbind(1,t(xx[(sn[i]+1):(sn[i+1]),]))
-      }else{
-        XVX <- XVX + t(cbind(1,xx[(sn[i]+1):(sn[i+1]),]))%*%inv.V%*%cbind(1,xx[(sn[i]+1):(sn[i+1]),])
-      }
-      
-    }
-    
-    D<-det(XVX)
-    A<-sum(diag( solve(XVX) ))
-  }
-  
-  
-  return(c(D,A))
-}
 findsubforCGOSS<-function(n,R){
   if (n %% R != 0) {
     me=floor(n/R)
@@ -320,16 +154,26 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   }
   index_CGOSS_interation <- cluster$sorted_indices[index.CGOSS]
   ncCGOSS <- mcgoss
-  D.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)[1]
-  A.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)[2]
-  return(list(index = index_CGOSS_interation,D = D.after,A = A.after,R = R_CGOSS,nc = ncCGOSS,C=cluster$cluster_sizes_vector))
+  return(list(index = index_CGOSS_interation,R = R_CGOSS,nc = ncCGOSS,C=cluster$cluster_sizes_vector,FX=FXXXX,FY=FYYY))
 }
-
-Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsize,anneal){
+MSE_LM<-function(xx,yy,beta){
+  p<-ncol(xx)
+  beta0 <- as.matrix(lm(yy ~ xx)$coefficients)
+  mse<-sum((beta0[-1]-beta)^2)
+  bt0<-(beta0[1]-1)^2
+  return(list(bt0,mse,beta0))
+}
+MSPE_LM<-function(xx,yy,beta){
+  n<-nrow(xx)
+  y.est<-cbind(1,xx)%*%beta
+  mspe<- mean((yy-y.est)^2)
+}
+Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsize,setted_cluster=10,anneal){
   big_column_vector<-c()
   beta=rep(1, p)
   m=ceiling(n / R)
   sigma=diag(0.5,p,p)+matrix(0.5,p,p)
+  #sigma=diag(1,p,p)
   lrs=length(N_all)
   names=c("CGOSS.bt.mat",  "IBOSS.bt.mat", "OSS.bt.mat", 
           "knowGOSS.bt.mat", "GOSS.bt.mat","GIBOSS.bt.mat","knowGIBOSS.bt.mat",
@@ -349,7 +193,10 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
   for(name in mat_names) {
     assign(name, matrix(NA, p+1, nloop*lrs), envir = .GlobalEnv)
   }
+  
   itr = 0
+  
+  
   #######
   for (j in 1:lrs) {
     D.CGOSS=0
@@ -363,6 +210,9 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
       random_numbers <- generate_groups(R,m,N,groupsize)
       C <- round(random_numbers)
       SC = c(0, cumsum(C))
+      
+      
+      
       if (k%/%100 == k/100) cat(k, "-")
       itr <- itr+1
       set.seed(k* 100000)
@@ -388,24 +238,38 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
         if(dist_x=="case4") {FXX[(SC[i] + 1):(SC[i+1]),]=mvrnorm(C[i], rep(-2+(i-1)/5, p), sigma) }
         index.knowGOSS <- c(index.knowGOSS, OAJ2_cpp(apply(FXX[(SC[i] + 1):(SC[i+1]),],2,scalex),m, tPow=2) + SC[i])
         index.knowGIBOSS <- c(index.knowGIBOSS, iboss(FXX[(SC[i] + 1):(SC[i+1]),],m) + SC[i])
+        
         Fori <- FXX
+        
+        
+        
       }
+      
+      
       FYori <- 1 + Fori%*%beta + Fa + Fe
       shuffled_indices <- sample(nrow(FXX))
       shuffled_df <- FXX[shuffled_indices, ]
       rownames(shuffled_df) <- rownames(FXX)[shuffled_indices]
       FXX <- shuffled_df
+      
       CC=rep(N/R,R)
       SSC = c(0, cumsum(CC))
       for(i in 1:R){
+        
+        
         
         index.GOSS <- c(index.GOSS, OAJ2_cpp(apply(FXX[(SSC[i] + 1):(SSC[i+1]),],2,scalex),m, tPow=2) + SSC[i])
         
         index.GIBOSS <- c(index.GIBOSS, iboss(FXX[(SSC[i] + 1):(SSC[i+1]),],m) + SSC[i])
       }
-
+      
+      
+      
+      
+      
       FY <- 1 + FXX%*%beta + Fa + Fe
       nc <- rep(m,R)
+      
       
       ########################################## OSS
       nc2 <- c()
@@ -415,56 +279,26 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
         nc2[i] <- length(nc.OSS)
       }
       
+      
       #########################CGOSS###########################################################################
       
       time.start<-Sys.time()
-      D.oss=count_info_cpp(FXX[index.OSS,],FY[index.OSS,],n,1,p)[1]
-      A.oss=count_info_cpp(FXX[index.OSS,],FY[index.OSS,],n,1,p)[2]
-      obj.best<-obj.all<-(anneal/p)*log(D.oss)-(1-anneal)*(log(A.oss))
-      obj.before<-obj.best
-      index.best<-index.OSS
-      nc.best<-n
-      R.best<-1
-      Cn=2
-      C.CGOSS=C
-      T.initial<-n*p/5
-      repeat {
-        informat <- GOSS(setseed, FXX, FY, n, Cn, p)
-        obj.candi <- (anneal/p)*log(informat$D) - (1-anneal)*(log(informat$A/p))
-        if (obj.candi >= obj.best) {
-          if (obj.candi == obj.best && obj.best == obj.before) {
-            break
-          }
-          obj.best    <- obj.candi
-          index.best  <- informat$index
-          nc.best     <- informat$nc
-          C.CGOSS     <- informat$C
-          R.best      <- informat$R
-          obj.before  <- obj.candi
-          Cn <- Cn + 1
-          next
-        }
-        alpha <- if (obj.before == obj.candi) 0.3 else if (Cn == informat$R) 0.95 else 0.85
-        T.cool <- T.initial * alpha^Cn
-        heatprob <- exp(-(obj.best - obj.candi)/T.cool)
-        if (runif(1) < heatprob) {
-          Cn <- Cn + 1
-          obj.before <- obj.candi
-          next
-        } else {
-          break
-        }
-      }
       
-      final_index_CGOSS<-index.best
-      ncCGOSS<-nc.best
-      R_CGOSS<-R.best
+      informat <- GOSS(setseed, FXX, FY, n, setted_cluster, p)
+      final_index_CGOSS  <- informat$index
+      ncCGOSS     <- informat$nc
+      C.CGOSS     <- informat$C
+      R_CGOSS     <- informat$R
+      FX.opt      <- informat$FX
+      FY.opt     <- informat$FY
       time.end<-Sys.time()
       time.CGOSS<-time.CGOSS+as.numeric(difftime(time.end, time.start, units = "secs"))
       print(time.CGOSS)
       print(R_CGOSS)
       meanR<-meanR+R_CGOSS
-
+      
+      
+      
       ############################################## IBOSS
       nc3 <- c()
       index.IBOSS <- sort(iboss(FXX,n))
@@ -474,8 +308,11 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
       }
       
       
+      
       ##########################################################  GOSS
-
+      
+      
+      
       GOSS.Est <- Est_hat_cpp(xx=FXX[index.GOSS,], yy=FY[index.GOSS,], 
                               beta, Var.a, Var.e, nc, R, p)
       GOSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.GOSS,], FY[index.GOSS,], 
@@ -499,8 +336,12 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
       knowGOSS.bt[,itr] <- knowGOSS.Est[[5]]
       
       ############################################################# estimate GIBOSS
+      
       GIBOSS.Est <- Est_hat_cpp(xx=FXX[index.GIBOSS,], yy=FY[index.GIBOSS,], 
                                 beta, Var.a, Var.e, nc, R, p)
+      
+      
+      
       GIBOSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.GIBOSS,], FY[index.GIBOSS,], 
                                    GIBOSS.Est[[5]], GIBOSS.Est[[6]], GIBOSS.Est[[7]], nc,C, R)
       GIBOSS.bt.mat[,itr] <- GIBOSS.Est[[1]]
@@ -510,8 +351,14 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
       GIBOSS.bt[,itr] <- GIBOSS.Est[[5]]
       
       ############################################################# estimate knowGIBOSS
+      
+      
+      
       knowGIBOSS.Est <- Est_hat_cpp(xx=Fori[index.knowGIBOSS,], yy=FYori[index.knowGIBOSS,], 
                                     beta, Var.a, Var.e, nc, R, p)
+      
+      
+      
       knowGIBOSS.pred[,itr] <- MSPE_fn(FYori, Fori, Fori[index.knowGIBOSS,], FYori[index.knowGIBOSS,], 
                                        knowGIBOSS.Est[[5]], knowGIBOSS.Est[[6]], knowGIBOSS.Est[[7]], nc,C, R)
       knowGIBOSS.bt.mat[,itr] <- knowGIBOSS.Est[[1]]
@@ -519,36 +366,50 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
       knowGIBOSS.Var.e[,itr]<- knowGIBOSS.Est[[3]]
       knowGIBOSS.bt0.dif[,itr] <- knowGIBOSS.Est[[4]]
       knowGIBOSS.bt[,itr] <- knowGIBOSS.Est[[5]]
+      
+      
+      
       ############################################################# estimate CGOSS
+      
+      
       CGOSS.Est <- Est_hat_cpp(xx=FXX[final_index_CGOSS,], yy=FY[final_index_CGOSS,], 
                                beta, Var.a, Var.e, ncCGOSS, R_CGOSS, p)
-      CGOSS.pred[,itr]  <- MSPE_fn(FY,FXX , FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
+      CGOSS.pred[,itr]  <- MSPE_fn(FY.opt,FX.opt , FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
                                    CGOSS.Est[[5]], CGOSS.Est[[6]], CGOSS.Est[[7]], ncCGOSS,C.CGOSS, R_CGOSS)
       CGOSS.bt.mat[,itr] <- CGOSS.Est[[1]]
       CGOSS.Var.a[,itr]<- CGOSS.Est[[2]]
       CGOSS.Var.e[,itr]<- CGOSS.Est[[3]]
       CGOSS.bt0.dif[,itr] <- CGOSS.Est[[4]]
       CGOSS.bt[,itr] <- CGOSS.Est[[5]]
+      
       ##########################################################  OSS
-      OSS.Est <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
-                             beta, Var.a, Var.e, nc2, R, p)
-      OSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.OSS,], FY[index.OSS,], 
-                                OSS.Est[[5]], OSS.Est[[6]], OSS.Est[[7]], nc2,(N/n)*nc2, R)
-      OSS.bt.mat[,itr] <- OSS.Est[[1]]
-      OSS.Var.a[,itr]<- OSS.Est[[2]]
-      OSS.Var.e[,itr]<- OSS.Est[[3]]
-      OSS.bt0.dif[,itr] <- OSS.Est[[4]]
-      OSS.bt[,itr] <- OSS.Est[[5]]
+      # OSS.Est <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
+      #                        beta, Var.a, Var.e, nc2, R, p)
+      # OSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.OSS,], FY[index.OSS,], 
+      #                           OSS.Est[[5]], OSS.Est[[6]], OSS.Est[[7]], nc2,(N/n)*nc2, R)
+      EST_OSS_LM<-MSE_LM(FXX[index.OSS,],FY[index.OSS,],beta)
+      OSS.pred[,itr]<-OSS_mspe<-MSPE_LM(FXX,FY,EST_OSS_LM[[3]])
+      OSS.bt.mat[,itr] <- EST_OSS_LM[[2]]
+      #OSS.Var.a[,itr]<- OSS.Est[[2]]
+      #OSS.Var.e[,itr]<- OSS.Est[[3]]
+      OSS.bt0.dif[,itr] <- EST_OSS_LM[[1]]
+      OSS.bt[,itr] <- EST_OSS_LM[[3]]
       ############################################################# estimate IBOSS
-      IBOSS.Est <- Est_hat_cpp(xx=FXX[index.IBOSS,], yy=FY[index.IBOSS,], 
-                               beta, Var.a, Var.e, nc3, R, p)
-      IBOSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.IBOSS,], FY[index.IBOSS,], 
-                                  IBOSS.Est[[5]], IBOSS.Est[[6]], IBOSS.Est[[7]], nc3,(N/n)*nc3, R)
-      IBOSS.bt.mat[,itr] <- IBOSS.Est[[1]]
-      IBOSS.Var.a[,itr]<- IBOSS.Est[[2]]
-      IBOSS.Var.e[,itr]<- IBOSS.Est[[3]]
-      IBOSS.bt0.dif[,itr] <- IBOSS.Est[[4]]
-      IBOSS.bt[,itr] <- IBOSS.Est[[5]]
+      # IBOSS.Est <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
+      #                        beta, Var.a, Var.e, nc2, R, p)
+      # IBOSS.pred[,itr] <- MSPE_fn(FYori, Fori, FXX[index.OSS,], FY[index.OSS,], 
+      #                           OSS.Est[[5]], OSS.Est[[6]], OSS.Est[[7]], nc2,(N/n)*nc2, R)
+      EST_IBOSS_LM<-MSE_LM(FXX[index.IBOSS,],FY[index.IBOSS,],beta)
+      IBOSS.pred[,itr]<-IBOSS_mspe<-MSPE_LM(FXX,FY,EST_IBOSS_LM[[3]])
+      IBOSS.bt.mat[,itr] <- EST_IBOSS_LM[[2]]
+      #OSS.Var.a[,itr]<- OSS.Est[[2]]
+      #OSS.Var.e[,itr]<- OSS.Est[[3]]
+      IBOSS.bt0.dif[,itr] <- EST_IBOSS_LM[[1]]
+      IBOSS.bt[,itr] <- EST_IBOSS_LM[[3]]
+      
+      
+      
+      
       cat(j,"-",k,"\n")
     }
     
@@ -575,39 +436,46 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
     mse.knowGIBOSS <- c(mse.knowGIBOSS, mean(knowGIBOSS.bt.mat[,loc]))
     
   }
+  
   rec1<-cbind(mse.CGOSS, mse.iboss, mse.oss, mse.knowGOSS, mse.Goss,mse.GIBOSS,mse.knowGIBOSS)
+  
   ###############################################
   mse.CGOSS.Var.a <- mse.oss.Var.a <- mse.iboss.Var.a  <- mse.Goss.Var.a <- mse.GIBOSS.Var.a<- mse.knowGIBOSS.Var.a<- mse.knowGOSS.Var.a <-c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     mse.CGOSS.Var.a <- c(mse.CGOSS.Var.a, mean(CGOSS.Var.a[,loc]))
-    mse.iboss.Var.a <- c(mse.iboss.Var.a, mean(IBOSS.Var.a[,loc]))
-    mse.oss.Var.a <- c(mse.oss.Var.a, mean(OSS.Var.a[,loc]))
+    #mse.iboss.Var.a <- c(mse.iboss.Var.a, mean(IBOSS.Var.a[,loc]))
+    #mse.oss.Var.a <- c(mse.oss.Var.a, mean(OSS.Var.a[,loc]))
     mse.knowGOSS.Var.a <- c(mse.knowGOSS.Var.a, mean(knowGOSS.Var.a[,loc]))
     mse.Goss.Var.a <- c(mse.Goss.Var.a, mean(GOSS.Var.a[,loc]))
     mse.GIBOSS.Var.a <- c(mse.GIBOSS.Var.a, mean(GIBOSS.Var.a[,loc]))
     mse.knowGIBOSS.Var.a <- c(mse.knowGIBOSS.Var.a, mean(knowGIBOSS.Var.a[,loc]))
     
   }
+  
   rec2<-cbind(mse.CGOSS.Var.a, mse.iboss.Var.a, mse.oss.Var.a, mse.knowGOSS.Var.a, mse.Goss.Var.a,mse.GIBOSS.Var.a,mse.knowGIBOSS.Var.a)
+  
   ###############################################
   mse.CGOSS.Var.e <- mse.oss.Var.e <- mse.iboss.Var.e <- mse.Goss.Var.e<- mse.GIBOSS.Var.e<- mse.knowGIBOSS.Var.e <- mse.knowGOSS.Var.e <-c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     mse.CGOSS.Var.e <- c(mse.CGOSS.Var.e, mean(CGOSS.Var.e[,loc]))
-    mse.iboss.Var.e <- c(mse.iboss.Var.e, mean(IBOSS.Var.e[,loc]))
-    mse.oss.Var.e <- c(mse.oss.Var.e, mean(OSS.Var.e[,loc]))
+    #mse.iboss.Var.e <- c(mse.iboss.Var.e, mean(IBOSS.Var.e[,loc]))
+    #mse.oss.Var.e <- c(mse.oss.Var.e, mean(OSS.Var.e[,loc]))
     mse.knowGOSS.Var.e <- c(mse.knowGOSS.Var.e, mean(knowGOSS.Var.e[,loc]))
     mse.Goss.Var.e <- c(mse.Goss.Var.e, mean(GOSS.Var.e[,loc]))
     mse.GIBOSS.Var.e <- c(mse.GIBOSS.Var.e, mean(GIBOSS.Var.e[,loc]))
     mse.knowGIBOSS.Var.e <- c(mse.knowGIBOSS.Var.e, mean(knowGIBOSS.Var.e[,loc]))
     
   }
+  
   rec3<-cbind(mse.CGOSS.Var.e, mse.iboss.Var.e, mse.oss.Var.e, mse.knowGOSS.Var.e, mse.Goss.Var.e,mse.GIBOSS.Var.e,mse.knowGIBOSS.Var.e)
+  
   ##################################################
   mspe.Goss <- mspe.knowGOSS <- mspe.CGOSS<- mspe.oss<- mspe.GIBOSS<- mspe.knowGIBOSS<- mspe.iboss <- c()
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
+    
     mspe.knowGOSS <- c(mspe.knowGOSS, mean(knowGOSS.pred[,loc]))
     mspe.Goss <- c(mspe.Goss, mean(GOSS.pred[,loc]))
     mspe.CGOSS <- c(mspe.CGOSS, mean(CGOSS.pred[,loc]))
@@ -648,11 +516,12 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
 
 
 N=c(1e4,5e4,1e5)
-
-result = Comp(N,p=50,R=20,Var.e=9,nloop=200,n=1e3,dist_x ="case4", dist_a="N.ori",groupsize="large",anneal=0.1)
+modeltype="N.ML"
+result = Comp(N,p=50,R=20,Var.e=9,nloop=200,n=1e3,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=10)
 result
 
 
+png(paste0(filename,"remake_mse_",modeltype,".png"),width=800,height = 600)
 plot(log10(N), log10(result[[1]][,1]), xlab=expression(log["10"](N)), ylab = expression(log["10"](MSE)), pch=1,lwd=2,
      ylim=c(min(log10(result[[1]])), max(log10(result[[1]]))),xlim=c(min(log10(N)), max(log10(N))), type="o",main = "")
 pp <- dim(result[[1]])[2]
@@ -661,11 +530,12 @@ for(i in 2:pp){
 }
 
 legend("topright", lty=1:pp, pch=(1:pp), col=1:pp,
-       legend=c("CGOSS","IBOSS","OSS","known-GOSS","GOSS","GIBOSS","knowGIBOSS"),cex=0.75)
+       legend=c("CGOSS","IBOSS","OSS","known-GOSS","GOSS","GIBOSS","known-GIBOSS"),cex=0.75)
 
+dev.off()
 
 ###########################################
-
+png(paste0(filename,"remake_mspe_",modeltype,".png"),width=800,height = 600)
 plot(log10(N), log10(result[[4]][,1]), xlab=expression(log["10"](N)), ylab = expression(log["10"](MSPE)), pch=1,lwd=2,
      ylim=c(min(log10(result[[4]])), max(log10(result[[4]]))),xlim=c(min(log10(N)), max(log10(N))), type="o",main = "")
 pp <- dim(result[[4]])[2]
@@ -674,10 +544,10 @@ for(i in 2:pp){
 }
 
 legend("topright", lty=1:pp, pch=(1:pp), col=1:pp,
-       legend=c("CGOSS","IBOSS","OSS","known-GOSS","GOSS","GIBOSS","knowGIBOSS"),cex=0.75)
+       legend=c("CGOSS","IBOSS","OSS","known-GOSS","GOSS","GIBOSS","known-GIBOSS"),cex=0.75)
 
 
-
+dev.off()
 
 
 
