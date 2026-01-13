@@ -4,6 +4,7 @@
 #People can use "large" or "small" to control the differences between the size of generated groups.
 #People can use "setted_cluster" to control the cluster number we choose in the algorithm.
 
+
 #The function Comp is the main function that do the comparison between 5 subsample methods. 
 #People can change the value of "n" to have different size of subsample set.
 
@@ -12,7 +13,7 @@
 
 
 
-
+#######################
 rm(list=ls())
 library(devtools)
 library(ClusterR)
@@ -168,7 +169,7 @@ MSPE_LM<-function(xx,yy,beta){
   y.est<-cbind(1,xx)%*%beta
   mspe<- mean((yy-y.est)^2)
 }
-Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsize,setted_cluster=10,anneal){
+Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groupsize,setted_cluster=10){
   big_column_vector<-c()
   beta=rep(1, p)
   m=ceiling(n / R)
@@ -238,11 +239,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
         if(dist_x=="case4") {FXX[(SC[i] + 1):(SC[i+1]),]=mvrnorm(C[i], rep(-2+(i-1)/5, p), sigma) }
         index.knowGOSS <- c(index.knowGOSS, OAJ2_cpp(apply(FXX[(SC[i] + 1):(SC[i+1]),],2,scalex),m, tPow=2) + SC[i])
         index.knowGIBOSS <- c(index.knowGIBOSS, iboss(FXX[(SC[i] + 1):(SC[i+1]),],m) + SC[i])
-        
         Fori <- FXX
-        
-        
-        
       }
       
       
@@ -296,8 +293,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
       print(time.CGOSS)
       print(R_CGOSS)
       meanR<-meanR+R_CGOSS
-      
-      
       
       ############################################## IBOSS
       nc3 <- c()
@@ -444,8 +439,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     mse.CGOSS.Var.a <- c(mse.CGOSS.Var.a, mean(CGOSS.Var.a[,loc]))
-    #mse.iboss.Var.a <- c(mse.iboss.Var.a, mean(IBOSS.Var.a[,loc]))
-    #mse.oss.Var.a <- c(mse.oss.Var.a, mean(OSS.Var.a[,loc]))
     mse.knowGOSS.Var.a <- c(mse.knowGOSS.Var.a, mean(knowGOSS.Var.a[,loc]))
     mse.Goss.Var.a <- c(mse.Goss.Var.a, mean(GOSS.Var.a[,loc]))
     mse.GIBOSS.Var.a <- c(mse.GIBOSS.Var.a, mean(GIBOSS.Var.a[,loc]))
@@ -460,8 +453,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="NaN",groupsiz
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     mse.CGOSS.Var.e <- c(mse.CGOSS.Var.e, mean(CGOSS.Var.e[,loc]))
-    #mse.iboss.Var.e <- c(mse.iboss.Var.e, mean(IBOSS.Var.e[,loc]))
-    #mse.oss.Var.e <- c(mse.oss.Var.e, mean(OSS.Var.e[,loc]))
     mse.knowGOSS.Var.e <- c(mse.knowGOSS.Var.e, mean(knowGOSS.Var.e[,loc]))
     mse.Goss.Var.e <- c(mse.Goss.Var.e, mean(GOSS.Var.e[,loc]))
     mse.GIBOSS.Var.e <- c(mse.GIBOSS.Var.e, mean(GIBOSS.Var.e[,loc]))

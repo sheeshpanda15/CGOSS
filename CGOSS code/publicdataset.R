@@ -11,7 +11,7 @@
 
 
 
-
+#######################
 rm(list=ls())
 
 library(devtools)
@@ -67,44 +67,25 @@ mbky <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
   repeat {
-    # 检查 n / Cn 是否为正整数
-    # if (n %% Cn != 0) {
-    #   Cn <- Cn - 1
-    #   next  # 如果不是正整数，减少聚类数并跳到下一次循环
-    # }
-    
-    
-    
-    
-    # 执行 MiniBatchKmeans
-    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n/10, num_init = 5, max_iters = 5, initializer = 'kmeans++')
+   
+    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n, num_init = 3, max_iters = 5, initializer = 'kmeans++')
     centroids <- mini_batch_kmeans$centroids
     batchs <- assign_clusters(FXX, centroids)
     cluster_sizes <- table(batchs)
-    
     threshold <- n / Cn
-    # 检查是否有任何一个聚类的大小小于阈值
     if (any(cluster_sizes < threshold)) {
-      Cn <- Cn - 1  # 减少聚类数
+      Cn <- Cn - 1 
     } else {
-      break  # 如果没有小于阈值的聚类，跳出循环
+      break 
     }
   }
   
   R_CGOSS = length(cluster_sizes)
-  
-  # 添加原始数据索引信息
   original_indices <- 1:nrow(FXX)
   data_with_cluster <- data.frame(FXX, y = y, cluster = batchs, original_index = original_indices)
-  
-  # 按照聚类排序
   data_sorted <- data_with_cluster[order(data_with_cluster$cluster), ]
-  
-  # 分离排序后的矩阵和目标标签
   data_matrix_sorted <- as.matrix(data_sorted[, !(names(data_sorted) %in% c("row.names", "cluster", "original_index", "y")), drop = FALSE])
   sorted_y <- data_sorted$y
-  
-  # 获取每个聚类的大小和排序后的索引
   cluster_sizes <- table(data_sorted$cluster)
   cluster_sizes_vector <- as.vector(cluster_sizes)
   sorted_indices <- data_sorted$original_index
@@ -159,7 +140,7 @@ MSPE_LM<-function(xx,yy,beta){
   mspe<- mean((yy-y.est)^2)
 }
 Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
-  R=length(SCC)-1
+  R=length(SSC)-1
   p=ncol(X)
   N=nrow(X)
   
@@ -200,7 +181,6 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   time.end<-Sys.time()
   time.full<-as.numeric(difftime(time.end, time.start, units = "secs"))
   
-  print(time.full)
   print("get full_beta")
   time.CGOSS=0
   setseed=set.seed(42)
@@ -208,7 +188,6 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   
   
   m <- ceiling(n / R)
-  CC<- findsubforCGOSS(N,R)
   nc<- findsubforCGOSS(n,R)
   nc.GIBOSS<-c()
   for(i in 1:R){
@@ -217,9 +196,17 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
     nc.GIBOSS<-c(nc.GIBOSS,length(iboss(FXX[(SSC[i] + 1):(SSC[i+1]),],nc[i])))
   }
   ########################################## OSS
+  nc2 <- c()
   index.OSS <- sort(OAJ2_cpp(apply(FXX,2,scalex),n, tPow=2))
+  for (i in 1:R) {nc.OSS <- which(index.OSS >= (SSC[i] + 1) & index.OSS <= (SSC[i+1]))
+  nc2[i] <- length(nc.OSS)
+  }
   ############################################## IBOSS
+  nc3 <- c()
   index.IBOSS <- sort(iboss(FXX,n))
+  for (i in 1:R) {nc.IBOSS <- which(index.IBOSS >= (SSC[i] + 1) & index.IBOSS <= (SSC[i+1]))
+  nc3[i] <- length(nc.IBOSS)
+  }
   ############################################## CGOSS   
   
   time2.start<-Sys.time()
@@ -235,7 +222,7 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   time2.end<-Sys.time()
   time.CGOSS<-time.CGOSS+as.numeric(difftime(time2.end, time2.start, units = "secs"))
   print(time.CGOSS)
-  
+  print(R_CGOSS)
   ##########################################################  GOSS
   
   GOSS.Est <- Est_hat_cpp(xx=FXX[index.GOSS,], yy=FY[index.GOSS,], 
@@ -281,12 +268,39 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   IBOSS.bt0.dif <- EST_IBOSS_LM[[1]]
   IBOSS.bt <- EST_IBOSS_LM[[3]]
   
-  rec1<-cbind(CGOSS.bt.mat, IBOSS.bt.mat, OSS.bt.mat, GOSS.bt.mat,GIBOSS.bt.mat)
-  rec2<-cbind(CGOSS.Var.a, GOSS.Var.a,GIBOSS.Var.a)
-  rec3<-cbind(CGOSS.Var.e,GOSS.Var.e,GIBOSS.Var.e)
-  rec4 <- cbind(CGOSS.pred, IBOSS.pred, OSS.pred, GOSS.pred,GIBOSS.pred)
-  rec5 <- cbind(CGOSS.bt0.dif, IBOSS.bt0.dif, OSS.bt0.dif,  GOSS.bt0.dif,GIBOSS.bt0.dif)
-  return(list(rec1,rec2,rec3,rec4,rec5))
+  #########IBOSSLMM
+  IBOSS.Est.LMM <- Est_hat_cpp(xx=FXX[index.IBOSS,], yy=FY[index.IBOSS,], 
+                               beta, Var.a, Var.e, nc3, R, p)
+  IBOSS.pred.LMM <- MSPE_fn(FY, FXX, FXX[index.IBOSS,], FY[index.IBOSS,], 
+                            IBOSS.Est.LMM[[5]], IBOSS.Est.LMM[[6]], IBOSS.Est.LMM[[7]], nc3, C, R)
+  IBOSSLMM.bt.mat <- IBOSS.Est.LMM[[1]]
+  IBOSSLMM.Var.a<- IBOSS.Est.LMM[[2]]
+  IBOSSLMM.Var.e<- IBOSS.Est.LMM[[3]]
+  IBOSSLMM.bt0.dif <- IBOSS.Est.LMM[[4]]
+  IBOSSLMM.bt <- IBOSS.Est.LMM[[5]]
+  
+  #########OSSLMM
+  OSS.Est.LMM <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
+                             beta, Var.a, Var.e, nc2, R, p)
+  OSS.pred.LMM <- MSPE_fn(FY, FXX, FXX[index.OSS,], FY[index.OSS,], 
+                          OSS.Est.LMM[[5]], OSS.Est.LMM[[6]], OSS.Est.LMM[[7]], nc2, C, R)
+  OSSLMM.bt.mat <- OSS.Est.LMM[[1]]
+  OSSLMM.Var.a<- IBOSS.Est.LMM[[2]]
+  OSSLMM.Var.e<- IBOSS.Est.LMM[[3]]
+  OSSLMM.bt0.dif <- IBOSS.Est.LMM[[4]]
+  OSSLMM.bt <- IBOSS.Est.LMM[[5]]
+  
+  
+  ########################
+  
+  
+  
+  rec1<-cbind(CGOSS.bt.mat, IBOSS.bt.mat, OSS.bt.mat, GOSS.bt.mat,GIBOSS.bt.mat,IBOSSLMM.bt.mat,OSSLMM.bt.mat)
+  rec2<-cbind(CGOSS.Var.a, GOSS.Var.a,GIBOSS.Var.a,IBOSSLMM.Var.a,OSSLMM.Var.a)
+  rec3<-cbind(CGOSS.Var.e,GOSS.Var.e,GIBOSS.Var.e,IBOSSLMM.Var.e,OSSLMM.Var.e)
+  rec4 <- cbind(CGOSS.pred, IBOSS.pred, OSS.pred, GOSS.pred,GIBOSS.pred,IBOSS.pred.LMM,OSS.pred.LMM)
+  
+  return(list(rec1,rec2,rec3,rec4))
 }
 #########################
 

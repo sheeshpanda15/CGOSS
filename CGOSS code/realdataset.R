@@ -11,7 +11,7 @@
 
 
 
-
+#######################
 rm(list=ls())
 
 library(devtools)
@@ -67,44 +67,24 @@ mbky <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
   repeat {
-    # 检查 n / Cn 是否为正整数
-    # if (n %% Cn != 0) {
-    #   Cn <- Cn - 1
-    #   next  # 如果不是正整数，减少聚类数并跳到下一次循环
-    # }
-    
-    
-    
-    
-    # 执行 MiniBatchKmeans
     mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n, num_init = 3, max_iters = 5, initializer = 'kmeans++')
     centroids <- mini_batch_kmeans$centroids
     batchs <- assign_clusters(FXX, centroids)
     cluster_sizes <- table(batchs)
-    
     threshold <- n / Cn
-    # 检查是否有任何一个聚类的大小小于阈值
     if (any(cluster_sizes < threshold)) {
-      Cn <- Cn - 1  # 减少聚类数
+      Cn <- Cn - 1  
     } else {
-      break  # 如果没有小于阈值的聚类，跳出循环
+      break  
     }
   }
   
   R_CGOSS = length(cluster_sizes)
-  
-  # 添加原始数据索引信息
   original_indices <- 1:nrow(FXX)
   data_with_cluster <- data.frame(FXX, y = y, cluster = batchs, original_index = original_indices)
-  
-  # 按照聚类排序
   data_sorted <- data_with_cluster[order(data_with_cluster$cluster), ]
-  
-  # 分离排序后的矩阵和目标标签
   data_matrix_sorted <- as.matrix(data_sorted[, !(names(data_sorted) %in% c("row.names", "cluster", "original_index", "y")), drop = FALSE])
   sorted_y <- data_sorted$y
-  
-  # 获取每个聚类的大小和排序后的索引
   cluster_sizes <- table(data_sorted$cluster)
   cluster_sizes_vector <- as.vector(cluster_sizes)
   sorted_indices <- data_sorted$original_index
@@ -290,7 +270,6 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   #########IBOSSLMM
   IBOSS.Est.LMM <- Est_hat_cpp(xx=FXX[index.IBOSS,], yy=FY[index.IBOSS,], 
                                beta, Var.a, Var.e, nc3, R, p)
-  # 注意：这里需要确保 nc3 (每组样本数) 计算正确，且传入 MSPE_fn 的数据顺序对齐
   IBOSS.pred.LMM <- MSPE_fn(FY, FXX, FXX[index.IBOSS,], FY[index.IBOSS,], 
                             IBOSS.Est.LMM[[5]], IBOSS.Est.LMM[[6]], IBOSS.Est.LMM[[7]], nc3, C, R)
   IBOSSLMM.bt.mat <- IBOSS.Est.LMM[[1]]/(p-1)
@@ -302,7 +281,6 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   #########OSSLMM
   OSS.Est.LMM <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
                                beta, Var.a, Var.e, nc2, R, p)
-  # 注意：这里需要确保 nc3 (每组样本数) 计算正确，且传入 MSPE_fn 的数据顺序对齐
   OSS.pred.LMM <- MSPE_fn(FY, FXX, FXX[index.OSS,], FY[index.OSS,], 
                           OSS.Est.LMM[[5]], OSS.Est.LMM[[6]], OSS.Est.LMM[[7]], nc2, C, R)
   OSSLMM.bt.mat <- OSS.Est.LMM[[1]]/(p-1)
