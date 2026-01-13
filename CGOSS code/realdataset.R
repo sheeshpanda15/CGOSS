@@ -1,16 +1,17 @@
-# This R code calculates the MSE for different subsampling methods as the full data size N varies.
+#This R code shows the comparison between different subsample methods on a Realdata Set: "energydata_complete"
 
-# It is capable of simulating four distinct data distribution scenarios (from case1 to case4) 
-#  and two different sigma_a distributions, totaling eight combinations.
+#We choose "day" as the groups in this dataset but people can try other settings by change the grouping option. 
+#For different setting we recommend to set different step length for CGOSS to ensure the calculation speed quick enough.
 
-# By altering the C2 in the "mysimu2" function to 10C1, this code can serve to compute the MSE 
-# for various subsampling methods in situations, where there is a significant imbalance between the data of each group.
+#The function Comp is the main function that do the comparison between 5 subsample method. 
+#People can change the value of "n" to have different size of subsample set.
+#People can change the value of "obj.c" to choose different setting of the objective function.
 
-# Using the "mysimu" function, we can obtain the MSE estimates for the slope parameter, 
-#  sigma_a, sigma_e, and the intercept parameter, as well as the MSPE for the response over the full data.
+#We use CPP to help speed up the code. People must put 'myoss.cpp','lmm_fast.cpp' to the environment.
 
-#############################
-############################
+
+
+
 rm(list=ls())
 
 library(devtools)
@@ -18,8 +19,7 @@ library(MASS)
 library(ClusterR)
 
 Rcpp::sourceCpp('myoss.cpp')
-Rcpp::sourceCpp("distance_calculation.cpp")
-Rcpp::sourceCpp("lmm_fast.cpp")
+Rcpp::sourceCpp('lmm_fast.cpp')
 
 iboss=function(x,k){
   ind=NULL
@@ -56,15 +56,11 @@ MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
   return(mspe)
 }
 assign_clusters <- function(data, centroids) {
-  # 初始化结果向量
   cluster_assignments <- numeric(nrow(data))
-  
-  # 计算每个点到所有聚类中心的距离
   for (i in 1:nrow(data)) {
     distances <- apply(centroids, 1, function(centroid) sum((data[i, ] - centroid) ^ 2))
     cluster_assignments[i] <- which.min(distances)
   }
-  
   return(cluster_assignments)
 }
 mbky <- function(setseed, FXX, y, n, Cn) {
@@ -150,15 +146,27 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   return(list(index = index_CGOSS_interation,D = D.after,A = A.after,R = R_CGOSS,C=cluster$cluster_sizes_vector
               ,FX=FXXXX,FY=FYYY,nc = ncCGOSS))
 }
-mysimu2=function(X,Y,SSC,groupsize,n,C,anneal){
+MSE_LM<-function(xx,yy,beta){
+  p<-ncol(xx)
+  beta0 <- as.matrix(lm(yy ~ xx)$coefficients)
+  mse<-sum((beta0[-1]-beta)^2)
+  bt0<-(beta0[1]-1)^2
+  return(list(bt0,mse,beta0))
+}
+MSPE_LM<-function(xx,yy,beta){
+  n<-nrow(xx)
+  y.est<-cbind(1,xx)%*%beta
+  mspe<- mean((yy-y.est)^2)
+}
+Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   R=length(SCC)-1
   p=ncol(X)
   N=nrow(X)
-  m=ceiling(n / R)
+  
   names=c("CGOSS.bt.mat",  "IBOSS.bt.mat", "OSS.bt.mat", 
-           "GOSS.bt.mat","GIBOSS.bt.mat",
+          "GOSS.bt.mat","GIBOSS.bt.mat",
           "CGOSS.pred",  "IBOSS.pred", "OSS.pred", 
-           "GOSS.pred","GIBOSS.pred",
+          "GOSS.pred","GIBOSS.pred",
           "CGOSS.bt0.dif","IBOSS.bt0.dif","OSS.bt0.dif",
           "GOSS.bt0.dif","GIBOSS.bt0.dif",
           "CGOSS.Var.a","IBOSS.Var.a","OSS.Var.a",
@@ -175,137 +183,115 @@ mysimu2=function(X,Y,SSC,groupsize,n,C,anneal){
   }
   FXX<-X
   FY <- matrix(Y, ncol = 1)
-  nc=groupsize
+  C<-groupsize
   
+  
+  time.start<-Sys.time()
   beta0 <- as.matrix(lm(FY ~ FXX)$coefficients)
-  sigma.hat0 <- find_sigma_cpp(FXX, FY, beta0, nc, R)
-  beta1 <- find_beta_cpp(FXX, FY, sigma.hat0[[1]],sigma.hat0[[2]], nc, R, p)
-  sigma.hat1 <- find_sigma_cpp(FXX, FY, beta1, nc, R)
-  beta.2 <- find_beta_cpp(FXX, FY, sigma.hat1[[1]], sigma.hat1[[2]], nc, R, p)
+  sigma.hat0 <- find_sigma_cpp(FXX, FY, beta0, C, R)
+  beta1 <- find_beta_cpp(FXX, FY, sigma.hat0[[1]],sigma.hat0[[2]], C, R, p)
+  sigma.hat1 <- find_sigma_cpp(FXX, FY, beta1, C, R)
+  beta.2 <- find_beta_cpp(FXX, FY, sigma.hat1[[1]], sigma.hat1[[2]], C, R, p)
   beta=beta.2[-1]
-  sigma.hat2 <- find_sigma_cpp(FXX, FY, beta.2, nc, R)
+  sigma.hat2 <- find_sigma_cpp(FXX, FY, beta.2, C, R)
   Var.a=sigma.hat2[[1]]
   Var.e=sigma.hat2[[2]] 
   
+  time.end<-Sys.time()
+  time.full<-as.numeric(difftime(time.end, time.start, units = "secs"))
   
+  print(time.full)
   print("get full_beta")
   time.CGOSS=0
   setseed=set.seed(42)
   index.GOSS<- index.GIBOSS<- c()
-  CC=rep(N/R,R)
+  
+  
+  m <- ceiling(n / R)
+  CC<- findsubforCGOSS(N,R)
+  nc<- findsubforCGOSS(n,R)
+  nc.GIBOSS<-c()
   for(i in 1:R){
-    index.GOSS <- c(index.GOSS, OAJ2_cpp(apply(FXX[(SSC[i] + 1):(SSC[i+1]),],2,scalex),m, tPow=2) + SSC[i])
-    index.GIBOSS <- c(index.GIBOSS, iboss(FXX[(SSC[i] + 1):(SSC[i+1]),],m) + SSC[i])
-    }
+    index.GOSS <- c(index.GOSS, OAJ2_cpp(apply(FXX[(SSC[i] + 1):(SSC[i+1]),],2,scalex),nc[i], tPow=2) + SSC[i])
+    index.GIBOSS <- c(index.GIBOSS, iboss(FXX[(SSC[i] + 1):(SSC[i+1]),],nc[i]) + SSC[i])
+    nc.GIBOSS<-c(nc.GIBOSS,length(iboss(FXX[(SSC[i] + 1):(SSC[i+1]),],nc[i])))
+  }
   ########################################## OSS
   nc2 <- c()
   index.OSS <- sort(OAJ2_cpp(apply(FXX,2,scalex),n, tPow=2))
   for (i in 1:R) {nc.OSS <- which(index.OSS >= (SSC[i] + 1) & index.OSS <= (SSC[i+1]))
-    nc2[i] <- length(nc.OSS)
-      }
+  nc2[i] <- length(nc.OSS)
+  }
   ############################################## IBOSS
   nc3 <- c()
   index.IBOSS <- sort(iboss(FXX,n))
   for (i in 1:R) {nc.IBOSS <- which(index.IBOSS >= (SSC[i] + 1) & index.IBOSS <= (SSC[i+1]))
-        nc3[i] <- length(nc.IBOSS)
-      }
+  nc3[i] <- length(nc.IBOSS)
+  }
   ############################################## CGOSS   
-  time.start<-Sys.time()
-  D.oss=count_info_cpp(FXX[index.OSS,],FY[index.OSS,],n,1,p)[1]
-  A.oss=count_info_cpp(FXX[index.OSS,],FY[index.OSS,],n,1,p)[2]
-  obj.best<-obj.all<-(anneal/p)*log(D.oss)-(1-anneal)*(log(A.oss))
-  obj.before<-obj.best
-  index.best<-index.OSS
-  nc.best<-n
-  R.best<-1
-  Cn=2
-  T.initial<-R
-  repeat {
-    informat <- GOSS(setseed, FXX, FY, n, Cn, p)
-    obj.candi <- (anneal/p)*log(informat$D) - (1-anneal)*(log(informat$A/p))
-    if (obj.candi >= obj.best) {
-      obj.best    <- obj.candi
-        final_index_CGOSS  <- informat$index
-        ncCGOSS     <- informat$nc
-        C.est       <- informat$C
-        FX.est      <- informat$FX
-        FY.est      <- informat$FY
-        R_CGOSS      <- informat$R
-        obj.before  <- obj.candi
-        Cn <- Cn + 8
-        next
-        }
-        # alpha <- if (obj.before == obj.candi) 0.8 else if (Cn == informat$R) 0.95 else 0.85
-        alpha <- 0.95
-        T.cool <- T.initial * alpha^Cn
-        heatprob <- exp(-(obj.best - obj.candi)/T.cool)
-        if (runif(1, min = 0.1, max = 0.9) < heatprob) {
-          Cn <- Cn + 8
-          obj.before <- obj.candi
-          next
-        } else {
-          break
-        }
-      }
-      
-    time.end<-Sys.time()
-    time.CGOSS<-time.CGOSS+as.numeric(difftime(time.end, time.start, units = "secs"))
-    nc <- rep(m,R)
-      
-    ##########################################################  GOSS
-      
-    GOSS.Est <- Est_hat_cpp(xx=FXX[index.GOSS,], yy=FY[index.GOSS,], 
+  
+  time2.start<-Sys.time()
+  
+  informat <- GOSS(setseed, FXX, FY, n, setted_cluster, p)
+  final_index_CGOSS  <- informat$index
+  ncCGOSS     <- informat$nc
+  C.est       <- informat$C
+  FX.est      <- informat$FX
+  FY.est      <- informat$FY
+  R_CGOSS      <- informat$R
+  
+  time2.end<-Sys.time()
+  time.CGOSS<-time.CGOSS+as.numeric(difftime(time2.end, time2.start, units = "secs"))
+  print(time.CGOSS)
+  
+  ##########################################################  GOSS
+  
+  GOSS.Est <- Est_hat_cpp(xx=FXX[index.GOSS,], yy=FY[index.GOSS,], 
                           beta, Var.a, Var.e, nc, R, p)
-    GOSS.pred <- MSPE_fn(FY, FXX, FXX[index.GOSS,], FY[index.GOSS,], 
-                                 GOSS.Est[[5]], GOSS.Est[[6]], GOSS.Est[[7]], nc,C, R)
-    GOSS.bt.mat <- GOSS.Est[[1]]/(p-1)
-    GOSS.Var.a<- GOSS.Est[[2]]
-    GOSS.Var.e<- GOSS.Est[[3]]
-    GOSS.bt0.dif <- GOSS.Est[[4]]
-    GOSS.bt <- GOSS.Est[[5]]
-      ############################################################# estimate GIBOSS
-    GIBOSS.Est <- Est_hat_cpp(xx=FXX[index.GIBOSS,], yy=FY[index.GIBOSS,], 
-                            beta, Var.a, Var.e, nc, R, p)
-    GIBOSS.pred<- MSPE_fn(FY, FXX, FXX[index.GIBOSS,], FY[index.GIBOSS,], 
-                                   GIBOSS.Est[[5]], GIBOSS.Est[[6]], GIBOSS.Est[[7]], nc,C, R)
-    GIBOSS.bt.mat<- GIBOSS.Est[[1]]/(p-1)
-    GIBOSS.Var.a<- GIBOSS.Est[[2]]
-    GIBOSS.Var.e<- GIBOSS.Est[[3]]
-    GIBOSS.bt0.dif<- GIBOSS.Est[[4]]
-    GIBOSS.bt <- GIBOSS.Est[[5]]
-    ############################################################# estimate CGOSS
-    CGOSS.Est <- Est_hat_cpp(xx=FXX[final_index_CGOSS,], yy=FY[final_index_CGOSS,], 
+  GOSS.pred <- MSPE_fn(FY, FXX, FXX[index.GOSS,], FY[index.GOSS,], 
+                       GOSS.Est[[5]], GOSS.Est[[6]], GOSS.Est[[7]], nc,C, R)
+  GOSS.bt.mat <- GOSS.Est[[1]]
+  GOSS.Var.a<- GOSS.Est[[2]]
+  GOSS.Var.e<- GOSS.Est[[3]]
+  GOSS.bt0.dif <- GOSS.Est[[4]]
+  GOSS.bt <- GOSS.Est[[5]]
+  ############################################################# estimate GIBOSS
+  GIBOSS.Est <- Est_hat_cpp(xx=FXX[index.GIBOSS,], yy=FY[index.GIBOSS,], 
+                            beta, Var.a, Var.e, nc.GIBOSS, R, p)
+  GIBOSS.pred<- MSPE_fn(FY, FXX, FXX[index.GIBOSS,], FY[index.GIBOSS,], 
+                        GIBOSS.Est[[5]], GIBOSS.Est[[6]], GIBOSS.Est[[7]], nc.GIBOSS,C, R)
+  GIBOSS.bt.mat<- GIBOSS.Est[[1]]
+  GIBOSS.Var.a<- GIBOSS.Est[[2]]
+  GIBOSS.Var.e<- GIBOSS.Est[[3]]
+  GIBOSS.bt0.dif<- GIBOSS.Est[[4]]
+  GIBOSS.bt <- GIBOSS.Est[[5]]
+  ############################################################# estimate CGOSS
+  
+  CGOSS.Est <- Est_hat_cpp(xx=FXX[final_index_CGOSS,], yy=FY[final_index_CGOSS,], 
                            beta, Var.a, Var.e, ncCGOSS, R_CGOSS, p)
-    CGOSS.pred  <- MSPE_fn(FY.est, FX.est, FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
-                                   CGOSS.Est[[5]], CGOSS.Est[[6]], CGOSS.Est[[7]], ncCGOSS,C.est, R_CGOSS)
-    CGOSS.bt.mat <- CGOSS.Est[[1]]/(p-1)
-    CGOSS.Var.a<- CGOSS.Est[[2]]
-    CGOSS.Var.e<- CGOSS.Est[[3]]
-    CGOSS.bt0.dif <- CGOSS.Est[[4]]
-    CGOSS.bt <- CGOSS.Est[[5]]
-    ##########################################################  OSS
-    OSS.Est <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
-                         beta, Var.a, Var.e, nc2, R, p)
-    OSS.pred <- MSPE_fn(FY, FXX, FXX[index.OSS,], FY[index.OSS,], 
-                                OSS.Est[[5]], OSS.Est[[6]], OSS.Est[[7]], nc2,C, R)
-    OSS.bt.mat <- OSS.Est[[1]]/(p-1)
-    OSS.Var.a<- OSS.Est[[2]]
-    OSS.Var.e<- OSS.Est[[3]]
-    OSS.bt0.dif <- OSS.Est[[4]]
-    OSS.bt <- OSS.Est[[5]]
-    ############################################################# estimate IBOSS
-    IBOSS.Est <- Est_hat_cpp(xx=FXX[index.IBOSS,], yy=FY[index.IBOSS,], 
-                         beta, Var.a, Var.e, nc3, R, p)
-    IBOSS.pred <- MSPE_fn(FY, FXX, FXX[index.IBOSS,], FY[index.IBOSS,], 
-                                  IBOSS.Est[[5]], IBOSS.Est[[6]], IBOSS.Est[[7]], nc3,C, R)
-    IBOSS.bt.mat <- IBOSS.Est[[1]]/(p-1)
-    IBOSS.Var.a<- IBOSS.Est[[2]]
-    IBOSS.Var.e<- IBOSS.Est[[3]]
-    IBOSS.bt0.dif <- IBOSS.Est[[4]]
-    IBOSS.bt <- IBOSS.Est[[5]]
+  CGOSS.pred  <- MSPE_fn(FY.est, FX.est, FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
+                         CGOSS.Est[[5]], CGOSS.Est[[6]], CGOSS.Est[[7]], ncCGOSS,C.est, R_CGOSS)
+  CGOSS.bt.mat <- CGOSS.Est[[1]]
+  CGOSS.Var.a<- CGOSS.Est[[2]]
+  CGOSS.Var.e<- CGOSS.Est[[3]]
+  CGOSS.bt0.dif <- CGOSS.Est[[4]]
+  CGOSS.bt <- CGOSS.Est[[5]]
+  ##########################################################  OSS
+  EST_OSS_LM<-MSE_LM(FXX[index.OSS,],FY[index.OSS,],beta)
+  OSS.pred<-OSS_mspe<-MSPE_LM(FXX,FY,EST_OSS_LM[[3]])
+  OSS.bt.mat <- EST_OSS_LM[[2]]
+  OSS.bt0.dif <- EST_OSS_LM[[1]]
+  OSS.bt <- EST_OSS_LM[[3]]
+  ############################################################# estimate IBOSS
+  EST_IBOSS_LM<-MSE_LM(FXX[index.IBOSS,],FY[index.IBOSS,],beta)
+  IBOSS.pred<-IBOSS_mspe<-MSPE_LM(FXX,FY,EST_IBOSS_LM[[3]])
+  IBOSS.bt.mat <- EST_IBOSS_LM[[2]]
+  IBOSS.bt0.dif <- EST_IBOSS_LM[[1]]
+  IBOSS.bt <- EST_IBOSS_LM[[3]]
+  
   rec1<-cbind(CGOSS.bt.mat, IBOSS.bt.mat, OSS.bt.mat, GOSS.bt.mat,GIBOSS.bt.mat)
-  rec2<-cbind(CGOSS.Var.a, IBOSS.Var.a, OSS.Var.a,  GOSS.Var.a,GIBOSS.Var.a)
-  rec3<-cbind(CGOSS.Var.e, IBOSS.Var.e, OSS.Var.e, GOSS.Var.e,GIBOSS.Var.e)
+  rec2<-cbind(CGOSS.Var.a, GOSS.Var.a,GIBOSS.Var.a)
+  rec3<-cbind(CGOSS.Var.e,GOSS.Var.e,GIBOSS.Var.e)
   rec4 <- cbind(CGOSS.pred, IBOSS.pred, OSS.pred, GOSS.pred,GIBOSS.pred)
   rec5 <- cbind(CGOSS.bt0.dif, IBOSS.bt0.dif, OSS.bt0.dif,  GOSS.bt0.dif,GIBOSS.bt0.dif)
   return(list(rec1,rec2,rec3,rec4,rec5))
@@ -315,13 +301,11 @@ mysimu2=function(X,Y,SSC,groupsize,n,C,anneal){
 
 ## ==== CONFIG (Energy dataset) ====
 file_path <- "energydata_complete.csv"
-# response
 y_col <- "Appliances"     
 # grouping option:
-#   "Day" (recommended), "WeekStatus", "DayOfWeek", "Month"
+#   "Day" (recommended), "DayOfWeek", "Month"
 group_mode <- "Day"
 
-## ==== LOAD ====
 df <- read.csv(file_path, stringsAsFactors = FALSE, check.names = FALSE)
 
 ## ==== CHECK ====
@@ -339,22 +323,16 @@ df$Month <- as.Date(format(dt, "%Y-%m-01"))
 df$DayOfWeek <- factor(weekdays(df$Day),
                        levels = c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
 
-# if WeekStatus not present, create it (0=weekend,1=weekday) consistent with your earlier description
-if (!("WeekStatus" %in% names(df))) {
-  df$WeekStatus <- ifelse(df$DayOfWeek %in% c("Saturday","Sunday"), 0L, 1L)
-}
 
 # group column
 if (group_mode == "Day") {
   group_col <- "Day"
-} else if (group_mode == "WeekStatus") {
-  group_col <- "WeekStatus"
-} else if (group_mode == "DayOfWeek") {
+}  else if (group_mode == "DayOfWeek") {
   group_col <- "DayOfWeek"
 } else if (group_mode == "Month") {
   group_col <- "Month"
 } else {
-  stop("Unsupported group_mode. Use one of: Day, WeekStatus, DayOfWeek, Month.")
+  stop("Unsupported group_mode. Use one of: Day, DayOfWeek, Month.")
 }
 
 df[[group_col]] <- factor(df[[group_col]])
@@ -422,8 +400,7 @@ SCC           <- c(0L, cumsum(group_sizes))
 
 X_sorted <- X_sorted[, !colnames(X_sorted) %in% c("rv1", "rv2"), drop = FALSE]
 
-
-result = mysimu2(X=X_sorted,Y=Y_sorted,SSC=SCC,groupsize=group_sizes,C=group_sizes,n=1e3,anneal=0.9)
+result = Comp(X=X_sorted,Y=Y_sorted,SSC=SCC,groupsize=group_sizes,n=1e3,setted_cluster=50)
 result
 
 
