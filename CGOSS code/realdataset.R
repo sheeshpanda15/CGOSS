@@ -77,7 +77,7 @@ mbky <- function(setseed, FXX, y, n, Cn) {
     
     
     # 执行 MiniBatchKmeans
-    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n/10, num_init = 5, max_iters = 5, initializer = 'kmeans++')
+    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n, num_init = 3, max_iters = 5, initializer = 'kmeans++')
     centroids <- mini_batch_kmeans$centroids
     batchs <- assign_clusters(FXX, centroids)
     cluster_sizes <- table(batchs)
@@ -156,7 +156,7 @@ MSE_LM<-function(xx,yy,beta){
 MSPE_LM<-function(xx,yy,beta){
   n<-nrow(xx)
   y.est<-cbind(1,xx)%*%beta
-  mspe<- mean((yy-y.est)^2)
+  mspe<- mean((yy-y.est)^2)/nrow(xx)
 }
 Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   R=length(SCC)-1
@@ -200,7 +200,6 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   time.end<-Sys.time()
   time.full<-as.numeric(difftime(time.end, time.start, units = "secs"))
   
-  print(time.full)
   print("get full_beta")
   time.CGOSS=0
   setseed=set.seed(42)
@@ -208,7 +207,6 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   
   
   m <- ceiling(n / R)
-  CC<- findsubforCGOSS(N,R)
   nc<- findsubforCGOSS(n,R)
   nc.GIBOSS<-c()
   for(i in 1:R){
@@ -243,14 +241,14 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   time2.end<-Sys.time()
   time.CGOSS<-time.CGOSS+as.numeric(difftime(time2.end, time2.start, units = "secs"))
   print(time.CGOSS)
-  
+  print(R_CGOSS)
   ##########################################################  GOSS
   
   GOSS.Est <- Est_hat_cpp(xx=FXX[index.GOSS,], yy=FY[index.GOSS,], 
                           beta, Var.a, Var.e, nc, R, p)
   GOSS.pred <- MSPE_fn(FY, FXX, FXX[index.GOSS,], FY[index.GOSS,], 
                        GOSS.Est[[5]], GOSS.Est[[6]], GOSS.Est[[7]], nc,C, R)
-  GOSS.bt.mat <- GOSS.Est[[1]]
+  GOSS.bt.mat <- GOSS.Est[[1]]/(p-1)
   GOSS.Var.a<- GOSS.Est[[2]]
   GOSS.Var.e<- GOSS.Est[[3]]
   GOSS.bt0.dif <- GOSS.Est[[4]]
@@ -260,7 +258,7 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
                             beta, Var.a, Var.e, nc.GIBOSS, R, p)
   GIBOSS.pred<- MSPE_fn(FY, FXX, FXX[index.GIBOSS,], FY[index.GIBOSS,], 
                         GIBOSS.Est[[5]], GIBOSS.Est[[6]], GIBOSS.Est[[7]], nc.GIBOSS,C, R)
-  GIBOSS.bt.mat<- GIBOSS.Est[[1]]
+  GIBOSS.bt.mat<- GIBOSS.Est[[1]]/(p-1)
   GIBOSS.Var.a<- GIBOSS.Est[[2]]
   GIBOSS.Var.e<- GIBOSS.Est[[3]]
   GIBOSS.bt0.dif<- GIBOSS.Est[[4]]
@@ -271,7 +269,7 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
                            beta, Var.a, Var.e, ncCGOSS, R_CGOSS, p)
   CGOSS.pred  <- MSPE_fn(FY.est, FX.est, FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
                          CGOSS.Est[[5]], CGOSS.Est[[6]], CGOSS.Est[[7]], ncCGOSS,C.est, R_CGOSS)
-  CGOSS.bt.mat <- CGOSS.Est[[1]]
+  CGOSS.bt.mat <- CGOSS.Est[[1]]/(p-1)
   CGOSS.Var.a<- CGOSS.Est[[2]]
   CGOSS.Var.e<- CGOSS.Est[[3]]
   CGOSS.bt0.dif <- CGOSS.Est[[4]]
@@ -279,13 +277,13 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   ##########################################################  OSS
   EST_OSS_LM<-MSE_LM(FXX[index.OSS,],FY[index.OSS,],beta)
   OSS.pred<-OSS_mspe<-MSPE_LM(FXX,FY,EST_OSS_LM[[3]])
-  OSS.bt.mat <- EST_OSS_LM[[2]]
+  OSS.bt.mat <- EST_OSS_LM[[2]]/(p-1)
   OSS.bt0.dif <- EST_OSS_LM[[1]]
   OSS.bt <- EST_OSS_LM[[3]]
   ############################################################# estimate IBOSS
   EST_IBOSS_LM<-MSE_LM(FXX[index.IBOSS,],FY[index.IBOSS,],beta)
   IBOSS.pred<-IBOSS_mspe<-MSPE_LM(FXX,FY,EST_IBOSS_LM[[3]])
-  IBOSS.bt.mat <- EST_IBOSS_LM[[2]]
+  IBOSS.bt.mat <- EST_IBOSS_LM[[2]]/(p-1)
   IBOSS.bt0.dif <- EST_IBOSS_LM[[1]]
   IBOSS.bt <- EST_IBOSS_LM[[3]]
   
