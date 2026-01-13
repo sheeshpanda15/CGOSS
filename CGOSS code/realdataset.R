@@ -159,7 +159,7 @@ MSPE_LM<-function(xx,yy,beta){
   mspe<- mean((yy-y.est)^2)/nrow(xx)
 }
 Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
-  R=length(SCC)-1
+  R=length(SSC)-1
   p=ncol(X)
   N=nrow(X)
   
@@ -287,12 +287,41 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   IBOSS.bt0.dif <- EST_IBOSS_LM[[1]]
   IBOSS.bt <- EST_IBOSS_LM[[3]]
   
-  rec1<-cbind(CGOSS.bt.mat, IBOSS.bt.mat, OSS.bt.mat, GOSS.bt.mat,GIBOSS.bt.mat)
-  rec2<-cbind(CGOSS.Var.a, GOSS.Var.a,GIBOSS.Var.a)
-  rec3<-cbind(CGOSS.Var.e,GOSS.Var.e,GIBOSS.Var.e)
-  rec4 <- cbind(CGOSS.pred, IBOSS.pred, OSS.pred, GOSS.pred,GIBOSS.pred)
-  rec5 <- cbind(CGOSS.bt0.dif, IBOSS.bt0.dif, OSS.bt0.dif,  GOSS.bt0.dif,GIBOSS.bt0.dif)
-  return(list(rec1,rec2,rec3,rec4,rec5))
+  #########IBOSSLMM
+  IBOSS.Est.LMM <- Est_hat_cpp(xx=FXX[index.IBOSS,], yy=FY[index.IBOSS,], 
+                               beta, Var.a, Var.e, nc3, R, p)
+  # 注意：这里需要确保 nc3 (每组样本数) 计算正确，且传入 MSPE_fn 的数据顺序对齐
+  IBOSS.pred.LMM <- MSPE_fn(FY, FXX, FXX[index.IBOSS,], FY[index.IBOSS,], 
+                            IBOSS.Est.LMM[[5]], IBOSS.Est.LMM[[6]], IBOSS.Est.LMM[[7]], nc3, C, R)
+  IBOSSLMM.bt.mat <- IBOSS.Est.LMM[[1]]/(p-1)
+  IBOSSLMM.Var.a<- IBOSS.Est.LMM[[2]]
+  IBOSSLMM.Var.e<- IBOSS.Est.LMM[[3]]
+  IBOSSLMM.bt0.dif <- IBOSS.Est.LMM[[4]]
+  IBOSSLMM.bt <- IBOSS.Est.LMM[[5]]
+  
+  #########OSSLMM
+  OSS.Est.LMM <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
+                               beta, Var.a, Var.e, nc2, R, p)
+  # 注意：这里需要确保 nc3 (每组样本数) 计算正确，且传入 MSPE_fn 的数据顺序对齐
+  OSS.pred.LMM <- MSPE_fn(FY, FXX, FXX[index.OSS,], FY[index.OSS,], 
+                          OSS.Est.LMM[[5]], OSS.Est.LMM[[6]], OSS.Est.LMM[[7]], nc2, C, R)
+  OSSLMM.bt.mat <- OSS.Est.LMM[[1]]/(p-1)
+  OSSLMM.Var.a<- IBOSS.Est.LMM[[2]]
+  OSSLMM.Var.e<- IBOSS.Est.LMM[[3]]
+  OSSLMM.bt0.dif <- IBOSS.Est.LMM[[4]]
+  OSSLMM.bt <- IBOSS.Est.LMM[[5]]
+  
+  
+  ########################
+  
+  
+  
+  rec1<-cbind(CGOSS.bt.mat, IBOSS.bt.mat, OSS.bt.mat, GOSS.bt.mat,GIBOSS.bt.mat,IBOSSLMM.bt.mat,OSSLMM.bt.mat)
+  rec2<-cbind(CGOSS.Var.a, GOSS.Var.a,GIBOSS.Var.a,IBOSSLMM.Var.a,OSSLMM.Var.a)
+  rec3<-cbind(CGOSS.Var.e,GOSS.Var.e,GIBOSS.Var.e,IBOSSLMM.Var.e,OSSLMM.Var.e)
+  rec4 <- cbind(CGOSS.pred, IBOSS.pred, OSS.pred, GOSS.pred,GIBOSS.pred,IBOSS.pred.LMM,OSS.pred.LMM)
+  
+  return(list(rec1,rec2,rec3,rec4))
 }
 
 #########################
