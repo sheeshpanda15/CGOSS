@@ -100,8 +100,7 @@ mbky <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
   repeat {
-    sz=550 - 100 * log10(nrow(FXX) + 1)
-    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = sz, num_init = 5, max_iters = 20, initializer = 'kmeans++')
+    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n, num_init = 5, max_iters = 20, initializer = 'kmeans++')
     centroids <- mini_batch_kmeans$centroids
     batchs <- assign_clusters(FXX, centroids)
     cluster_sizes <- table(batchs)
