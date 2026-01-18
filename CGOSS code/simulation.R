@@ -21,7 +21,7 @@ library(MASS)
 Rcpp::sourceCpp('myoss.cpp')
 Rcpp::sourceCpp("lmm_fast.cpp")
 
-filename<-CASE<-"case1"
+filename<-CASE<-"case4"
 
 iboss=function(x,k){
   ind=NULL
@@ -506,8 +506,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
 
 
 N=c(1e4,5e4,1e5)
-modeltype="N.ML"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=200,n=1e3,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=10)
+modeltype="N.ori"
+result = Comp(N,p=50,R=20,Var.e=9,nloop=50,n=1e3,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20)
 result
 
 
