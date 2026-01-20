@@ -87,25 +87,24 @@ generate_groups <- function(R, m, N,V) {
   
   return(result)
 }
-assign_clusters <- function(data, centroids) {
-  cluster_assignments <- numeric(nrow(data))
-  for (i in 1:nrow(data)) {
-    distances <- apply(centroids, 1, function(centroid) sum((data[i, ] - centroid) ^ 2))
-    cluster_assignments[i] <- which.min(distances)
-  }
-  
-  return(cluster_assignments)
-}
+
 mbky <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
   repeat {
-    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n, num_init = 5, max_iters = 20, initializer = 'kmeans++')
-    centroids <- mini_batch_kmeans$centroids
-    batchs <- assign_clusters(FXX, centroids)
-    cluster_sizes <- table(batchs)
+    # 1. 运行 Mini-Batch K-means
+    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 4096, 
+                                                   num_init = 3, max_iters = 5, 
+                                                   initializer = 'kmeans++')
     
+    # 2. 【关键修改】直接使用 C++ 接口预测簇，替代了原来的 assign_clusters 循环
+    # 这一步是秒出的，不会卡顿
+    batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
+    
+    # 3. 检查簇大小是否满足条件
+    cluster_sizes <- table(batchs)
     threshold <- n / Cn
+    
     if (any(cluster_sizes < threshold)) {
       Cn <- Cn - 1  
     } else {
@@ -113,21 +112,28 @@ mbky <- function(setseed, FXX, y, n, Cn) {
     }
   }
   
-  R_CGOSS = length(cluster_sizes)
-  original_indices <- 1:nrow(FXX)
-  data_with_cluster <- data.frame(FXX, y = y, cluster = batchs, original_index = original_indices)
-  data_sorted <- data_with_cluster[order(data_with_cluster$cluster), ]
-  data_matrix_sorted <- as.matrix(data_sorted[, !(names(data_sorted) %in% c("row.names", "cluster", "original_index", "y")), drop = FALSE])
-  sorted_y <- data_sorted$y
-  cluster_sizes <- table(data_sorted$cluster)
-  cluster_sizes_vector <- as.vector(cluster_sizes)
-  sorted_indices <- data_sorted$original_index
+  R_CGOSS <- length(cluster_sizes)
+  
+  # 4. 【优化排序】直接获取排序索引，避免创建巨大的 data.frame
+  sort_idx <- order(batchs)
+  
+  # 利用索引直接重排矩阵和向量，速度更快，内存更省
+  data_matrix_sorted <- FXX[sort_idx, , drop = FALSE]
+  sorted_y <- y[sort_idx]
+  sorted_indices <- (1:nrow(FXX))[sort_idx]
+  
+  # 重新计算排序后的 cluster sizes (其实和上面 table(batchs) 是一样的，但这保证顺序对应)
+  # 注意：table 默认按因子水平排序，这里为了保险起见，按出现的顺序或数值统计
+  cluster_sizes_vector <- as.vector(table(batchs[sort_idx]))
+  
   return(list(R_CGOSS = R_CGOSS, 
               data_matrix_sorted = data_matrix_sorted, 
               sorted_y = sorted_y, 
               cluster_sizes_vector = cluster_sizes_vector, 
               sorted_indices = sorted_indices))
 }
+
+
 findsubforCGOSS<-function(n,R){
   if (n %% R != 0) {
     me=floor(n/R)
