@@ -44,7 +44,55 @@ iboss=function(x,k){
 scalex=function(a){
   2*(a-min(a))/(max(a)-min(a))-1
 }
-MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
+MSPE_fn = function(fy, fx, sx, sy, beta, Var.a, Var.e, nc, C, R){
+  index <- 1
+  mv_hat <- c()
+  # 1. 基于训练结构计算随机效应
+  for (i in 1:R) {
+    if(i <= length(nc)){
+      current_indices <- index:(index + nc[i] - 1)
+      if(max(current_indices) <= length(sy)){
+        term1 <- Var.a / (Var.e + nc[i] * Var.a)
+        term2 <- sum((sy - cbind(1, sx) %*% beta)[current_indices])
+        mv_hat[i] <- term1 * term2
+        index <- index + nc[i]
+      } else {
+        mv_hat[i] <- 0
+      }
+    } else {
+      mv_hat[i] <- 0
+    }
+  }
+  
+  # 2. 比例投影：按比例放大 nc 以适应测试集大小
+  # 我们根据 nc 的比例构造一个新的 C 向量 (C_projected)
+  
+  N_test <- length(fy)          # 测试集的总样本量
+  valid_nc <- nc[1:R]           # 确保我们只取对应于 R 个估计效应的组大小
+  
+  # 计算比例
+  props <- valid_nc / sum(valid_nc)
+  
+  # 将这些比例投影到测试集大小
+  C_projected <- floor(props * N_test)
+  
+  # 3. 修正舍入误差
+  # 由于使用了 floor()，总和可能略小于 N_test。
+  # 我们将余数分配给前几个组，以确保长度完全匹配。
+  remainder <- N_test - sum(C_projected)
+  if(remainder > 0){
+    C_projected[1:remainder] <- C_projected[1:remainder] + 1
+  }
+  
+  # 4. 预测
+  # 现在 sum(C_projected) == length(fy)，所以 rep() 可以完美运行
+  y_hat <- cbind(1, fx)%*%beta + rep(mv_hat, times=C_projected)
+  
+  mspe <- mean((fy - y_hat)^2)
+  return(mspe)
+}
+
+MSPE_tru=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
   index <- 1
   mv_hat <- c()
   for (i in 1:R) {
@@ -52,12 +100,57 @@ MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
     index <- index + nc[i]
   }
   
-  
   y_hat <- cbind(1, fx)%*%beta + rep(mv_hat, C)
   mspe <- mean((fy - y_hat)^2)
   
   return(mspe)
 }
+
+MSPE_CGOSS_Match = function(fy_test, fx_test, sx_train, sy_train, beta_hat, Var.a, Var.e, nc_train, centroids){
+  
+  # === 第一步：现场计算 u_hat (BLUP) ===
+  # 逻辑源自你原本的 MSPE_fn
+  
+  R <- length(nc_train)
+  mv_hat <- numeric(R)
+  index <- 1
+  
+  # 计算 X*beta (固定效应预测值)，用于计算残差
+  # 注意：sx_train 是子样本的 X
+  fixed_pred_train <- cbind(1, sx_train) %*% beta_hat
+  
+  for (i in 1:R) {
+    # 提取当前组在子样本中的数据范围
+    current_indices <- index:(index + nc_train[i] - 1)
+    
+    # 提取当前组的残差 (y - X*beta)
+    # sy_train 是子样本的 Y
+    residuals_i <- sy_train[current_indices] - fixed_pred_train[current_indices]
+    
+    # 计算收缩系数和 u_hat
+    term1 <- Var.a / (Var.e + nc_train[i] * Var.a)
+    term2 <- sum(residuals_i)
+    
+    mv_hat[i] <- term1 * term2
+    
+    index <- index + nc_train[i]
+  }
+  
+  # === 第二步：匹配 (Matching) ===
+  
+  # 1. 使用训练好的中心点，判断测试集每个样本属于哪个 Cluster
+  pred_labels <- ClusterR::predict_KMeans(fx_test, centroids)
+  
+  # 2. 根据标签分配刚才算出来的 mv_hat
+  u_assigned <- mv_hat[pred_labels]
+  
+  # 3. 最终预测 (Fixed + Matched Random)
+  y_hat <- cbind(1, fx_test) %*% beta_hat + u_assigned
+  
+  mspe <- mean((fy_test - y_hat)^2)
+  return(mspe)
+}
+
 generate_groups <- function(R, m, N,V) {
   if (N <= R * m) {
     stop("N must be greater than R * m to ensure all integers are greater than m")
@@ -92,16 +185,12 @@ mbky <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
   repeat {
-    # 1. 运行 Mini-Batch K-means
     mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 4096, 
                                                    num_init = 3, max_iters = 5, 
                                                    initializer = 'kmeans++')
     
-    # 2. 【关键修改】直接使用 C++ 接口预测簇，替代了原来的 assign_clusters 循环
-    # 这一步是秒出的，不会卡顿
     batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
     
-    # 3. 检查簇大小是否满足条件
     cluster_sizes <- table(batchs)
     threshold <- n / Cn
     
@@ -113,24 +202,20 @@ mbky <- function(setseed, FXX, y, n, Cn) {
   }
   
   R_CGOSS <- length(cluster_sizes)
-  
-  # 4. 【优化排序】直接获取排序索引，避免创建巨大的 data.frame
   sort_idx <- order(batchs)
   
-  # 利用索引直接重排矩阵和向量，速度更快，内存更省
   data_matrix_sorted <- FXX[sort_idx, , drop = FALSE]
   sorted_y <- y[sort_idx]
   sorted_indices <- (1:nrow(FXX))[sort_idx]
-  
-  # 重新计算排序后的 cluster sizes (其实和上面 table(batchs) 是一样的，但这保证顺序对应)
-  # 注意：table 默认按因子水平排序，这里为了保险起见，按出现的顺序或数值统计
   cluster_sizes_vector <- as.vector(table(batchs[sort_idx]))
   
+  # 【修改处】增加了 centroids = mini_batch_kmeans$centroids
   return(list(R_CGOSS = R_CGOSS, 
               data_matrix_sorted = data_matrix_sorted, 
               sorted_y = sorted_y, 
               cluster_sizes_vector = cluster_sizes_vector, 
-              sorted_indices = sorted_indices))
+              sorted_indices = sorted_indices,
+              centroids = mini_batch_kmeans$centroids)) 
 }
 
 
@@ -152,6 +237,7 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   FXXXX <- cluster$data_matrix_sorted
   FYYY<- cluster$sorted_y
   SCC <- c(0, cumsum(cluster$cluster_sizes_vector))
+  
   mcgoss<-findsubforCGOSS(n,R_CGOSS)
   index.CGOSS <- integer(0) 
   for (i in 1:(length(SCC) - 1)) {
@@ -160,7 +246,15 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   }
   index_CGOSS_interation <- cluster$sorted_indices[index.CGOSS]
   ncCGOSS <- mcgoss
-  return(list(index = index_CGOSS_interation,R = R_CGOSS,nc = ncCGOSS,C=cluster$cluster_sizes_vector,FX=FXXXX,FY=FYYY))
+  
+  # 【修改处】增加了 centroids = cluster$centroids
+  return(list(index = index_CGOSS_interation,
+              R = R_CGOSS,
+              nc = ncCGOSS,
+              C=cluster$cluster_sizes_vector,
+              FX=FXXXX,
+              FY=FYYY,
+              centroids = cluster$centroids))
 }
 MSE_LM<-function(xx,yy,beta){
   p<-ncol(xx)
@@ -292,12 +386,14 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       C.CGOSS     <- informat$C
       R_CGOSS     <- informat$R
       FX.opt      <- informat$FX
+      centroids_CGOSS <- informat$centroids
       FY.opt     <- informat$FY
       time.end<-Sys.time()
       time.CGOSS<-time.CGOSS+as.numeric(difftime(time.end, time.start, units = "secs"))
       print(time.CGOSS)
       print(R_CGOSS)
       meanR<-meanR+R_CGOSS
+      
       
       ############################################## IBOSS
       nc3 <- c()
@@ -327,7 +423,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       knowGOSS.Est <- Est_hat_cpp(xx=Fori[index.knowGOSS,], yy=FYori[index.knowGOSS,], 
                                   beta, Var.a, Var.e, nc, R, p)
-      knowGOSS.pred[,itr] <- MSPE_fn(FYori, Fori, Fori[index.knowGOSS,], FYori[index.knowGOSS,], 
+      knowGOSS.pred[,itr] <- MSPE_tru(FYori, Fori, Fori[index.knowGOSS,], FYori[index.knowGOSS,], 
                                      knowGOSS.Est[[5]], knowGOSS.Est[[6]], knowGOSS.Est[[7]], nc,C, R)
       knowGOSS.bt.mat[,itr] <- knowGOSS.Est[[1]]
       knowGOSS.Var.a[,itr]<- knowGOSS.Est[[2]]
@@ -359,23 +455,34 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       
       
-      knowGIBOSS.pred[,itr] <- MSPE_fn(FYori, Fori, Fori[index.knowGIBOSS,], FYori[index.knowGIBOSS,], 
+      knowGIBOSS.pred[,itr] <- MSPE_tru(FYori, Fori, Fori[index.knowGIBOSS,], FYori[index.knowGIBOSS,], 
                                        knowGIBOSS.Est[[5]], knowGIBOSS.Est[[6]], knowGIBOSS.Est[[7]], nc,C, R)
       knowGIBOSS.bt.mat[,itr] <- knowGIBOSS.Est[[1]]
       knowGIBOSS.Var.a[,itr]<- knowGIBOSS.Est[[2]]
       knowGIBOSS.Var.e[,itr]<- knowGIBOSS.Est[[3]]
       knowGIBOSS.bt0.dif[,itr] <- knowGIBOSS.Est[[4]]
       knowGIBOSS.bt[,itr] <- knowGIBOSS.Est[[5]]
-      
-      
-      
+
       ############################################################# estimate CGOSS
-      
       
       CGOSS.Est <- Est_hat_cpp(xx=FXX[final_index_CGOSS,], yy=FY[final_index_CGOSS,], 
                                beta, Var.a, Var.e, ncCGOSS, R_CGOSS, p)
-      CGOSS.pred[,itr]  <- MSPE_fn(FY.opt,FX.opt , FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
-                                   CGOSS.Est[[5]], CGOSS.Est[[6]], CGOSS.Est[[7]], ncCGOSS,C.CGOSS, R_CGOSS)
+      
+      # 【核心修复】调用新的匹配函数
+      # 注意参数的变化：我们需要传入训练用的子样本数据 FXX[final_index_CGOSS,] 和 FY[final_index_CGOSS,]
+      CGOSS.pred[,itr]  <- MSPE_CGOSS_Match(
+        fy_test = FYori,                # 测试集 Y (全量真实)
+        fx_test = Fori,                 # 测试集 X (全量真实)
+        sx_train = FXX[final_index_CGOSS,], # 训练集 X (子样本)
+        sy_train = FY[final_index_CGOSS,],  # 训练集 Y (子样本)
+        beta_hat = CGOSS.Est[[5]],      # 估计出的 beta
+        Var.a = CGOSS.Est[[6]],         # 用户确认：Est[[6]] 是 Var.a
+        Var.e = CGOSS.Est[[7]],         # 用户确认：Est[[7]] 是 Var.e (Var.b)
+        nc_train = ncCGOSS,             # 训练集的组大小向量
+        centroids = centroids_CGOSS     # CGOSS 的中心点 (来自 informat$centroids)
+      )
+      
+      
       CGOSS.bt.mat[,itr] <- CGOSS.Est[[1]]
       CGOSS.Var.a[,itr]<- CGOSS.Est[[2]]
       CGOSS.Var.e[,itr]<- CGOSS.Est[[3]]
@@ -512,8 +619,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
 
 
 N=c(1e4,5e4,1e5)
-modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=50,n=1e3,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20)
+modeltype="N.large"
+result = Comp(N,p=50,R=20,Var.e=9,nloop=10,n=1e3,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=20)
 result
 
 

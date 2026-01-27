@@ -55,6 +55,20 @@ MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
   
   return(mspe)
 }
+
+MSPE_tru=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
+  index <- 1
+  mv_hat <- c()
+  for (i in 1:R) {
+    mv_hat[i] <- (Var.a/(Var.e+nc[i]*Var.a)) * sum((sy - cbind(1, sx)%*%beta)[index:(index + nc[i] - 1)]) 
+    index <- index + nc[i]
+  }
+  
+  y_hat <- cbind(1, fx)%*%beta - rep(mv_hat, C)
+  mspe <- mean((fy - y_hat)^2)
+  
+  return(mspe)
+}
 assign_clusters <- function(data, centroids) {
   cluster_assignments <- numeric(nrow(data))
   for (i in 1:nrow(data)) {
