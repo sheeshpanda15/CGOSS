@@ -350,7 +350,7 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
 file_path <- "energydata_complete.csv"
 y_col <- "Appliances"     
 # grouping option:
-#   "Day" , "DayOfWeek", "Month"(recommended)
+#   "Day" , "DayOfWeek", "Month"
 group_mode <- "Day"
 
 df <- read.csv(file_path, stringsAsFactors = FALSE, check.names = FALSE)
