@@ -107,50 +107,24 @@ MSPE_tru=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
 }
 
 MSPE_CGOSS_Match = function(fy_test, fx_test, sx_train, sy_train, beta_hat, Var.a, Var.e, nc_train, centroids){
-  
-  # === 第一步：现场计算 u_hat (BLUP) ===
-  # 逻辑源自你原本的 MSPE_fn
-  
   R <- length(nc_train)
   mv_hat <- numeric(R)
   index <- 1
-  
-  # 计算 X*beta (固定效应预测值)，用于计算残差
-  # 注意：sx_train 是子样本的 X
   fixed_pred_train <- cbind(1, sx_train) %*% beta_hat
-  
   for (i in 1:R) {
-    # 提取当前组在子样本中的数据范围
     current_indices <- index:(index + nc_train[i] - 1)
-    
-    # 提取当前组的残差 (y - X*beta)
-    # sy_train 是子样本的 Y
     residuals_i <- sy_train[current_indices] - fixed_pred_train[current_indices]
-    
-    # 计算收缩系数和 u_hat
     term1 <- Var.a / (Var.e + nc_train[i] * Var.a)
     term2 <- sum(residuals_i)
-    
     mv_hat[i] <- term1 * term2
-    
     index <- index + nc_train[i]
   }
-  
-  # === 第二步：匹配 (Matching) ===
-  
-  # 1. 使用训练好的中心点，判断测试集每个样本属于哪个 Cluster
   pred_labels <- ClusterR::predict_KMeans(fx_test, centroids)
-  
-  # 2. 根据标签分配刚才算出来的 mv_hat
   u_assigned <- mv_hat[pred_labels]
-  
-  # 3. 最终预测 (Fixed + Matched Random)
   y_hat <- cbind(1, fx_test) %*% beta_hat + u_assigned
-  
   mspe <- mean((fy_test - y_hat)^2)
   return(mspe)
 }
-
 generate_groups <- function(R, m, N,V) {
   if (N <= R * m) {
     stop("N must be greater than R * m to ensure all integers are greater than m")
@@ -180,7 +154,6 @@ generate_groups <- function(R, m, N,V) {
   
   return(result)
 }
-
 mbky <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
@@ -208,8 +181,6 @@ mbky <- function(setseed, FXX, y, n, Cn) {
   sorted_y <- y[sort_idx]
   sorted_indices <- (1:nrow(FXX))[sort_idx]
   cluster_sizes_vector <- as.vector(table(batchs[sort_idx]))
-  
-  # 【修改处】增加了 centroids = mini_batch_kmeans$centroids
   return(list(R_CGOSS = R_CGOSS, 
               data_matrix_sorted = data_matrix_sorted, 
               sorted_y = sorted_y, 
@@ -217,8 +188,6 @@ mbky <- function(setseed, FXX, y, n, Cn) {
               sorted_indices = sorted_indices,
               centroids = mini_batch_kmeans$centroids)) 
 }
-
-
 findsubforCGOSS<-function(n,R){
   if (n %% R != 0) {
     me=floor(n/R)
@@ -246,8 +215,6 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   }
   index_CGOSS_interation <- cluster$sorted_indices[index.CGOSS]
   ncCGOSS <- mcgoss
-  
-  # 【修改处】增加了 centroids = cluster$centroids
   return(list(index = index_CGOSS_interation,
               R = R_CGOSS,
               nc = ncCGOSS,
@@ -467,19 +434,16 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       CGOSS.Est <- Est_hat_cpp(xx=FXX[final_index_CGOSS,], yy=FY[final_index_CGOSS,], 
                                beta, Var.a, Var.e, ncCGOSS, R_CGOSS, p)
-      
-      # 【核心修复】调用新的匹配函数
-      # 注意参数的变化：我们需要传入训练用的子样本数据 FXX[final_index_CGOSS,] 和 FY[final_index_CGOSS,]
       CGOSS.pred[,itr]  <- MSPE_CGOSS_Match(
-        fy_test = FYori,                # 测试集 Y (全量真实)
-        fx_test = Fori,                 # 测试集 X (全量真实)
-        sx_train = FXX[final_index_CGOSS,], # 训练集 X (子样本)
-        sy_train = FY[final_index_CGOSS,],  # 训练集 Y (子样本)
-        beta_hat = CGOSS.Est[[5]],      # 估计出的 beta
-        Var.a = CGOSS.Est[[6]],         # 用户确认：Est[[6]] 是 Var.a
-        Var.e = CGOSS.Est[[7]],         # 用户确认：Est[[7]] 是 Var.e (Var.b)
-        nc_train = ncCGOSS,             # 训练集的组大小向量
-        centroids = centroids_CGOSS     # CGOSS 的中心点 (来自 informat$centroids)
+        fy_test = FYori,                
+        fx_test = Fori,                 
+        sx_train = FXX[final_index_CGOSS,], 
+        sy_train = FY[final_index_CGOSS,], 
+        beta_hat = CGOSS.Est[[5]],      
+        Var.a = CGOSS.Est[[6]],         
+        Var.e = CGOSS.Est[[7]],         
+        nc_train = ncCGOSS,             
+        centroids = centroids_CGOSS     
       )
       
       
