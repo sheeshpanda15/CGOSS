@@ -91,7 +91,6 @@ MSPE_fn = function(fy, fx, sx, sy, beta, Var.a, Var.e, nc, C, R){
   mspe <- mean((fy - y_hat)^2)
   return(mspe)
 }
-
 MSPE_tru=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
   index <- 1
   mv_hat <- c()
@@ -105,7 +104,6 @@ MSPE_tru=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
   
   return(mspe)
 }
-
 MSPE_CGOSS_Match = function(fy_test, fx_test, sx_train, sy_train, beta_hat, Var.a, Var.e, nc_train, centroids){
   R <- length(nc_train)
   mv_hat <- numeric(R)
@@ -445,8 +443,6 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         nc_train = ncCGOSS,             
         centroids = centroids_CGOSS     
       )
-      
-      
       CGOSS.bt.mat[,itr] <- CGOSS.Est[[1]]
       CGOSS.Var.a[,itr]<- CGOSS.Est[[2]]
       CGOSS.Var.e[,itr]<- CGOSS.Est[[3]]

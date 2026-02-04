@@ -42,73 +42,105 @@ iboss=function(x,k){
 scalex=function(a){
   2*(a-min(a))/(max(a)-min(a))-1
 }
-MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
+MSPE_fn = function(fy, fx, sx, sy, beta, Var.a, Var.e, nc, C, R){
   index <- 1
   mv_hat <- c()
+  # 1. 基于训练结构计算随机效应
   for (i in 1:R) {
-    mv_hat[i] <- (Var.a/(Var.e+nc[i]*Var.a)) * sum((sy - cbind(1, sx)%*%beta)[index:(index + nc[i] - 1)]) 
-    index <- index + nc[i]
+    if(i <= length(nc)){
+      current_indices <- index:(index + nc[i] - 1)
+      if(max(current_indices) <= length(sy)){
+        term1 <- Var.a / (Var.e + nc[i] * Var.a)
+        term2 <- sum((sy - cbind(1, sx) %*% beta)[current_indices])
+        mv_hat[i] <- term1 * term2
+        index <- index + nc[i]
+      } else {
+        mv_hat[i] <- 0
+      }
+    } else {
+      mv_hat[i] <- 0
+    }
   }
   
-  y_hat <- cbind(1, fx)%*%beta - rep(mv_hat, C)
-  mspe <- mean((fy - y_hat)^2)
+  # 2. 比例投影：按比例放大 nc 以适应测试集大小
+  # 我们根据 nc 的比例构造一个新的 C 向量 (C_projected)
   
+  N_test <- length(fy)          # 测试集的总样本量
+  valid_nc <- nc[1:R]           # 确保我们只取对应于 R 个估计效应的组大小
+  
+  # 计算比例
+  props <- valid_nc / sum(valid_nc)
+  
+  # 将这些比例投影到测试集大小
+  C_projected <- floor(props * N_test)
+  
+  # 3. 修正舍入误差
+  # 由于使用了 floor()，总和可能略小于 N_test。
+  # 我们将余数分配给前几个组，以确保长度完全匹配。
+  remainder <- N_test - sum(C_projected)
+  if(remainder > 0){
+    C_projected[1:remainder] <- C_projected[1:remainder] + 1
+  }
+  
+  # 4. 预测
+  # 现在 sum(C_projected) == length(fy)，所以 rep() 可以完美运行
+  y_hat <- cbind(1, fx)%*%beta + rep(mv_hat, times=C_projected)
+  
+  mspe <- mean((fy - y_hat)^2)
   return(mspe)
 }
-
-MSPE_tru=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
+MSPE_CGOSS_Match = function(fy_test, fx_test, sx_train, sy_train, beta_hat, Var.a, Var.e, nc_train, centroids){
+  R <- length(nc_train)
+  mv_hat <- numeric(R)
   index <- 1
-  mv_hat <- c()
+  fixed_pred_train <- cbind(1, sx_train) %*% beta_hat
   for (i in 1:R) {
-    mv_hat[i] <- (Var.a/(Var.e+nc[i]*Var.a)) * sum((sy - cbind(1, sx)%*%beta)[index:(index + nc[i] - 1)]) 
-    index <- index + nc[i]
+    current_indices <- index:(index + nc_train[i] - 1)
+    residuals_i <- sy_train[current_indices] - fixed_pred_train[current_indices]
+    term1 <- Var.a / (Var.e + nc_train[i] * Var.a)
+    term2 <- sum(residuals_i)
+    mv_hat[i] <- term1 * term2
+    index <- index + nc_train[i]
   }
-  
-  y_hat <- cbind(1, fx)%*%beta - rep(mv_hat, C)
-  mspe <- mean((fy - y_hat)^2)
-  
+  pred_labels <- ClusterR::predict_KMeans(fx_test, centroids)
+  u_assigned <- mv_hat[pred_labels]
+  y_hat <- cbind(1, fx_test) %*% beta_hat + u_assigned
+  mspe <- mean((fy_test - y_hat)^2)
   return(mspe)
-}
-assign_clusters <- function(data, centroids) {
-  cluster_assignments <- numeric(nrow(data))
-  for (i in 1:nrow(data)) {
-    distances <- apply(centroids, 1, function(centroid) sum((data[i, ] - centroid) ^ 2))
-    cluster_assignments[i] <- which.min(distances)
-  }
-  return(cluster_assignments)
 }
 mbky <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
   repeat {
-   
-    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n, num_init = 3, max_iters = 5, initializer = 'kmeans++')
-    centroids <- mini_batch_kmeans$centroids
-    batchs <- assign_clusters(FXX, centroids)
+    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 1024, 
+                                                   num_init = 2, max_iters = 20, 
+                                                   initializer = 'kmeans++')
+    
+    batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
+    
     cluster_sizes <- table(batchs)
     threshold <- n / Cn
+    
     if (any(cluster_sizes < threshold)) {
-      Cn <- Cn - 1 
+      Cn <- Cn - 1  
     } else {
-      break 
+      break  
     }
   }
   
-  R_CGOSS = length(cluster_sizes)
-  original_indices <- 1:nrow(FXX)
-  data_with_cluster <- data.frame(FXX, y = y, cluster = batchs, original_index = original_indices)
-  data_sorted <- data_with_cluster[order(data_with_cluster$cluster), ]
-  data_matrix_sorted <- as.matrix(data_sorted[, !(names(data_sorted) %in% c("row.names", "cluster", "original_index", "y")), drop = FALSE])
-  sorted_y <- data_sorted$y
-  cluster_sizes <- table(data_sorted$cluster)
-  cluster_sizes_vector <- as.vector(cluster_sizes)
-  sorted_indices <- data_sorted$original_index
+  R_CGOSS <- length(cluster_sizes)
+  sort_idx <- order(batchs)
   
+  data_matrix_sorted <- FXX[sort_idx, , drop = FALSE]
+  sorted_y <- y[sort_idx]
+  sorted_indices <- (1:nrow(FXX))[sort_idx]
+  cluster_sizes_vector <- as.vector(table(batchs[sort_idx]))
   return(list(R_CGOSS = R_CGOSS, 
               data_matrix_sorted = data_matrix_sorted, 
               sorted_y = sorted_y, 
               cluster_sizes_vector = cluster_sizes_vector, 
-              sorted_indices = sorted_indices))
+              sorted_indices = sorted_indices,
+              centroids = mini_batch_kmeans$centroids)) 
 }
 findsubforCGOSS<-function(n,R){
   if (n %% R != 0) {
@@ -128,6 +160,7 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   FXXXX <- cluster$data_matrix_sorted
   FYYY<- cluster$sorted_y
   SCC <- c(0, cumsum(cluster$cluster_sizes_vector))
+  
   mcgoss<-findsubforCGOSS(n,R_CGOSS)
   index.CGOSS <- integer(0) 
   for (i in 1:(length(SCC) - 1)) {
@@ -136,10 +169,13 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   }
   index_CGOSS_interation <- cluster$sorted_indices[index.CGOSS]
   ncCGOSS <- mcgoss
-  D.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)[1]
-  A.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)[2]
-  return(list(index = index_CGOSS_interation,D = D.after,A = A.after,R = R_CGOSS,C=cluster$cluster_sizes_vector
-              ,FX=FXXXX,FY=FYYY,nc = ncCGOSS))
+  return(list(index = index_CGOSS_interation,
+              R = R_CGOSS,
+              nc = ncCGOSS,
+              C=cluster$cluster_sizes_vector,
+              FX=FXXXX,
+              FY=FYYY,
+              centroids = cluster$centroids))
 }
 MSE_LM<-function(xx,yy,beta){
   p<-ncol(xx)
@@ -153,6 +189,7 @@ MSPE_LM<-function(xx,yy,beta){
   y.est<-cbind(1,xx)%*%beta
   mspe<- mean((yy-y.est)^2)
 }
+
 Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   R=length(SSC)-1
   p=ncol(X)
@@ -221,20 +258,20 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   for (i in 1:R) {nc.IBOSS <- which(index.IBOSS >= (SSC[i] + 1) & index.IBOSS <= (SSC[i+1]))
   nc3[i] <- length(nc.IBOSS)
   }
-  ############################################## CGOSS   
+  #########################CGOSS###########################################################################
   
-  time2.start<-Sys.time()
+  time.start<-Sys.time()
   
   informat <- GOSS(setseed, FXX, FY, n, setted_cluster, p)
   final_index_CGOSS  <- informat$index
   ncCGOSS     <- informat$nc
-  C.est       <- informat$C
-  FX.est      <- informat$FX
-  FY.est      <- informat$FY
-  R_CGOSS      <- informat$R
-  
-  time2.end<-Sys.time()
-  time.CGOSS<-time.CGOSS+as.numeric(difftime(time2.end, time2.start, units = "secs"))
+  C.CGOSS     <- informat$C
+  R_CGOSS     <- informat$R
+  FX.opt      <- informat$FX
+  centroids_CGOSS <- informat$centroids
+  FY.opt     <- informat$FY
+  time.end<-Sys.time()
+  time.CGOSS<-time.CGOSS+as.numeric(difftime(time.end, time.start, units = "secs"))
   print(time.CGOSS)
   print(R_CGOSS)
   ##########################################################  GOSS
@@ -262,8 +299,17 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   
   CGOSS.Est <- Est_hat_cpp(xx=FXX[final_index_CGOSS,], yy=FY[final_index_CGOSS,], 
                            beta, Var.a, Var.e, ncCGOSS, R_CGOSS, p)
-  CGOSS.pred  <- MSPE_fn(FY.est, FX.est, FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
-                         CGOSS.Est[[5]], CGOSS.Est[[6]], CGOSS.Est[[7]], ncCGOSS,C.est, R_CGOSS)
+  CGOSS.pred  <- MSPE_CGOSS_Match(
+    fy_test = FY,                
+    fx_test = FXX,                 
+    sx_train = FXX[final_index_CGOSS,], 
+    sy_train = FY[final_index_CGOSS,], 
+    beta_hat = CGOSS.Est[[5]],      
+    Var.a = CGOSS.Est[[6]],         
+    Var.e = CGOSS.Est[[7]],         
+    nc_train = ncCGOSS,             
+    centroids = centroids_CGOSS     
+  )
   CGOSS.bt.mat <- CGOSS.Est[[1]]
   CGOSS.Var.a<- CGOSS.Est[[2]]
   CGOSS.Var.e<- CGOSS.Est[[3]]

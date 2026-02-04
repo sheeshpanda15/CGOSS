@@ -42,36 +42,69 @@ iboss=function(x,k){
 scalex=function(a){
   2*(a-min(a))/(max(a)-min(a))-1
 }
-MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
+MSPE_fn = function(fy, fx, sx, sy, beta, Var.a, Var.e, nc, C, R){
   index <- 1
   mv_hat <- c()
+  # 1. 基于训练结构计算随机效应
   for (i in 1:R) {
-    mv_hat[i] <- (Var.a/(Var.e+nc[i]*Var.a)) * sum((sy - cbind(1, sx)%*%beta)[index:(index + nc[i] - 1)]) 
-    index <- index + nc[i]
+    if(i <= length(nc)){
+      current_indices <- index:(index + nc[i] - 1)
+      if(max(current_indices) <= length(sy)){
+        term1 <- Var.a / (Var.e + nc[i] * Var.a)
+        term2 <- sum((sy - cbind(1, sx) %*% beta)[current_indices])
+        mv_hat[i] <- term1 * term2
+        index <- index + nc[i]
+      } else {
+        mv_hat[i] <- 0
+      }
+    } else {
+      mv_hat[i] <- 0
+    }
   }
-  
-  y_hat <- cbind(1, fx)%*%beta - rep(mv_hat, C)
-  mspe <- mean((fy - y_hat)^2)/length(fy)
-  
+  N_test <- length(fy)         
+  valid_nc <- nc[1:R]           
+  props <- valid_nc / sum(valid_nc)
+  C_projected <- floor(props * N_test)
+  remainder <- N_test - sum(C_projected)
+  if(remainder > 0){
+    C_projected[1:remainder] <- C_projected[1:remainder] + 1
+  }
+  y_hat <- cbind(1, fx)%*%beta + rep(mv_hat, times=C_projected)
+  mspe <- mean((fy - y_hat)^2)/nrow(fy)
   return(mspe)
 }
-assign_clusters <- function(data, centroids) {
-  cluster_assignments <- numeric(nrow(data))
-  for (i in 1:nrow(data)) {
-    distances <- apply(centroids, 1, function(centroid) sum((data[i, ] - centroid) ^ 2))
-    cluster_assignments[i] <- which.min(distances)
+MSPE_CGOSS_Match = function(fy_test, fx_test, sx_train, sy_train, beta_hat, Var.a, Var.e, nc_train, centroids){
+  R <- length(nc_train)
+  mv_hat <- numeric(R)
+  index <- 1
+  fixed_pred_train <- cbind(1, sx_train) %*% beta_hat
+  for (i in 1:R) {
+    current_indices <- index:(index + nc_train[i] - 1)
+    residuals_i <- sy_train[current_indices] - fixed_pred_train[current_indices]
+    term1 <- Var.a / (Var.e + nc_train[i] * Var.a)
+    term2 <- sum(residuals_i)
+    mv_hat[i] <- term1 * term2
+    index <- index + nc_train[i]
   }
-  return(cluster_assignments)
+  pred_labels <- ClusterR::predict_KMeans(fx_test, centroids)
+  u_assigned <- mv_hat[pred_labels]
+  y_hat <- cbind(1, fx_test) %*% beta_hat + u_assigned
+  mspe <- mean((fy_test - y_hat)^2)/nrow(fy_test)
+  return(mspe)
 }
 mbky <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
   repeat {
-    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n, num_init = 3, max_iters = 5, initializer = 'kmeans++')
-    centroids <- mini_batch_kmeans$centroids
-    batchs <- assign_clusters(FXX, centroids)
+    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 1024, 
+                                                   num_init = 3, max_iters = 5, 
+                                                   initializer = 'kmeans++')
+    
+    batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
+    
     cluster_sizes <- table(batchs)
     threshold <- n / Cn
+    
     if (any(cluster_sizes < threshold)) {
       Cn <- Cn - 1  
     } else {
@@ -79,23 +112,21 @@ mbky <- function(setseed, FXX, y, n, Cn) {
     }
   }
   
-  R_CGOSS = length(cluster_sizes)
-  original_indices <- 1:nrow(FXX)
-  data_with_cluster <- data.frame(FXX, y = y, cluster = batchs, original_index = original_indices)
-  data_sorted <- data_with_cluster[order(data_with_cluster$cluster), ]
-  data_matrix_sorted <- as.matrix(data_sorted[, !(names(data_sorted) %in% c("row.names", "cluster", "original_index", "y")), drop = FALSE])
-  sorted_y <- data_sorted$y
-  cluster_sizes <- table(data_sorted$cluster)
-  cluster_sizes_vector <- as.vector(cluster_sizes)
-  sorted_indices <- data_sorted$original_index
+  R_CGOSS <- length(cluster_sizes)
+  sort_idx <- order(batchs)
   
+  data_matrix_sorted <- FXX[sort_idx, , drop = FALSE]
+  sorted_y <- y[sort_idx]
+  sorted_indices <- (1:nrow(FXX))[sort_idx]
+  cluster_sizes_vector <- as.vector(table(batchs[sort_idx]))
   return(list(R_CGOSS = R_CGOSS, 
               data_matrix_sorted = data_matrix_sorted, 
               sorted_y = sorted_y, 
               cluster_sizes_vector = cluster_sizes_vector, 
-              sorted_indices = sorted_indices))
+              sorted_indices = sorted_indices,
+              centroids = mini_batch_kmeans$centroids)) 
 }
-findsubforCGOSS<-function(n,R){
+findsub<-function(n,R){
   if (n %% R != 0) {
     me=floor(n/R)
     loss=n-me*R
@@ -113,7 +144,8 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   FXXXX <- cluster$data_matrix_sorted
   FYYY<- cluster$sorted_y
   SCC <- c(0, cumsum(cluster$cluster_sizes_vector))
-  mcgoss<-findsubforCGOSS(n,R_CGOSS)
+  
+  mcgoss<-findsub(n,R_CGOSS)
   index.CGOSS <- integer(0) 
   for (i in 1:(length(SCC) - 1)) {
     current_indices <- (SCC[i] + 1):SCC[i + 1]
@@ -121,10 +153,13 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   }
   index_CGOSS_interation <- cluster$sorted_indices[index.CGOSS]
   ncCGOSS <- mcgoss
-  D.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)[1]
-  A.after=count_info_cpp(FXX[index_CGOSS_interation,],FY[index_CGOSS_interation,],ncCGOSS,R_CGOSS,p)[2]
-  return(list(index = index_CGOSS_interation,D = D.after,A = A.after,R = R_CGOSS,C=cluster$cluster_sizes_vector
-              ,FX=FXXXX,FY=FYYY,nc = ncCGOSS))
+  return(list(index = index_CGOSS_interation,
+              R = R_CGOSS,
+              nc = ncCGOSS,
+              C=cluster$cluster_sizes_vector,
+              FX=FXXXX,
+              FY=FYYY,
+              centroids = cluster$centroids))
 }
 MSE_LM<-function(xx,yy,beta){
   p<-ncol(xx)
@@ -136,7 +171,7 @@ MSE_LM<-function(xx,yy,beta){
 MSPE_LM<-function(xx,yy,beta){
   n<-nrow(xx)
   y.est<-cbind(1,xx)%*%beta
-  mspe<- mean((yy-y.est)^2)/nrow(xx)
+  mspe<- mean((yy-y.est)^2)/n
 }
 Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   R=length(SSC)-1
@@ -185,14 +220,13 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   setseed=set.seed(42)
   index.GOSS<- index.GIBOSS<- c()
   
-  
-  m <- ceiling(n / R)
-  nc<- findsubforCGOSS(n,R)
+  nc<- findsub(n,R)
   nc.GIBOSS<-c()
   for(i in 1:R){
     index.GOSS <- c(index.GOSS, OAJ2_cpp(apply(FXX[(SSC[i] + 1):(SSC[i+1]),],2,scalex),nc[i], tPow=2) + SSC[i])
     index.GIBOSS <- c(index.GIBOSS, iboss(FXX[(SSC[i] + 1):(SSC[i+1]),],nc[i]) + SSC[i])
     nc.GIBOSS<-c(nc.GIBOSS,length(iboss(FXX[(SSC[i] + 1):(SSC[i+1]),],nc[i])))
+    
   }
   ########################################## OSS
   nc2 <- c()
@@ -206,20 +240,20 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   for (i in 1:R) {nc.IBOSS <- which(index.IBOSS >= (SSC[i] + 1) & index.IBOSS <= (SSC[i+1]))
   nc3[i] <- length(nc.IBOSS)
   }
-  ############################################## CGOSS   
+  #########################CGOSS###########################################################################
   
-  time2.start<-Sys.time()
+  time.start<-Sys.time()
   
   informat <- GOSS(setseed, FXX, FY, n, setted_cluster, p)
   final_index_CGOSS  <- informat$index
   ncCGOSS     <- informat$nc
-  C.est       <- informat$C
-  FX.est      <- informat$FX
-  FY.est      <- informat$FY
-  R_CGOSS      <- informat$R
-  
-  time2.end<-Sys.time()
-  time.CGOSS<-time.CGOSS+as.numeric(difftime(time2.end, time2.start, units = "secs"))
+  C.CGOSS     <- informat$C
+  R_CGOSS     <- informat$R
+  FX.opt      <- informat$FX
+  centroids_CGOSS <- informat$centroids
+  FY.opt     <- informat$FY
+  time.end<-Sys.time()
+  time.CGOSS<-time.CGOSS+as.numeric(difftime(time.end, time.start, units = "secs"))
   print(time.CGOSS)
   print(R_CGOSS)
   ##########################################################  GOSS
@@ -244,11 +278,19 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   GIBOSS.bt0.dif<- GIBOSS.Est[[4]]
   GIBOSS.bt <- GIBOSS.Est[[5]]
   ############################################################# estimate CGOSS
-  
   CGOSS.Est <- Est_hat_cpp(xx=FXX[final_index_CGOSS,], yy=FY[final_index_CGOSS,], 
                            beta, Var.a, Var.e, ncCGOSS, R_CGOSS, p)
-  CGOSS.pred  <- MSPE_fn(FY.est, FX.est, FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
-                         CGOSS.Est[[5]], CGOSS.Est[[6]], CGOSS.Est[[7]], ncCGOSS,C.est, R_CGOSS)
+  CGOSS.pred  <- MSPE_CGOSS_Match(
+    fy_test = FY,                
+    fx_test = FXX,                 
+    sx_train = FXX[final_index_CGOSS,], 
+    sy_train = FY[final_index_CGOSS,], 
+    beta_hat = CGOSS.Est[[5]],      
+    Var.a = CGOSS.Est[[6]],         
+    Var.e = CGOSS.Est[[7]],         
+    nc_train = ncCGOSS,             
+    centroids = centroids_CGOSS     
+  )
   CGOSS.bt.mat <- CGOSS.Est[[1]]/(p-1)
   CGOSS.Var.a<- CGOSS.Est[[2]]
   CGOSS.Var.e<- CGOSS.Est[[3]]
@@ -280,7 +322,7 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
   
   #########OSSLMM
   OSS.Est.LMM <- Est_hat_cpp(xx=FXX[index.OSS,], yy=FY[index.OSS,], 
-                               beta, Var.a, Var.e, nc2, R, p)
+                             beta, Var.a, Var.e, nc2, R, p)
   OSS.pred.LMM <- MSPE_fn(FY, FXX, FXX[index.OSS,], FY[index.OSS,], 
                           OSS.Est.LMM[[5]], OSS.Est.LMM[[6]], OSS.Est.LMM[[7]], nc2, C, R)
   OSSLMM.bt.mat <- OSS.Est.LMM[[1]]/(p-1)
@@ -308,7 +350,7 @@ Comp=function(X,Y,SSC,groupsize,n,setted_cluster){
 file_path <- "energydata_complete.csv"
 y_col <- "Appliances"     
 # grouping option:
-#   "Day" (recommended), "DayOfWeek", "Month"
+#   "Day" , "DayOfWeek", "Month"(recommended)
 group_mode <- "Day"
 
 df <- read.csv(file_path, stringsAsFactors = FALSE, check.names = FALSE)
@@ -325,8 +367,10 @@ stopifnot(!all(is.na(dt)))
 # time-derived grouping variables
 df$Day <- as.Date(dt)
 df$Month <- as.Date(format(dt, "%Y-%m-01"))
-df$DayOfWeek <- factor(weekdays(df$Day),
-                       levels = c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
+w <- as.POSIXlt(dt, tz = "UTC")$wday  # 0..6, 不受locale影响
+lvl <- c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")
+df$DayOfWeek <- factor(lvl[w + 1], levels = c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
+
 
 
 # group column
@@ -358,10 +402,9 @@ X_num <- df[, num_cols, drop = FALSE]
 
 # categorical predictors (exclude Y, and exclude raw date string)
 cat_cols <- names(df)[sapply(df, function(z) is.character(z) || is.factor(z))]
-cat_cols <- setdiff(cat_cols, c(y_col, "date"))  # remove raw timestamp
+cat_cols <- setdiff(cat_cols, c(y_col, "date", "Day", "DayOfWeek"))  # remove raw timestamp
 # also exclude grouping col from predictors if you want pure grouping placement
 cat_cols <- setdiff(cat_cols, group_col)
-
 # encode each categorical variable into ONE numeric column (no one-hot expansion)
 encode_single_col <- function(x) {
   f <- factor(x)
@@ -402,9 +445,7 @@ Y_sorted      <- Y[ord]
 group_sorted  <- df[[group_col]][ord]
 group_sizes   <- as.integer(table(group_sorted))
 SCC           <- c(0L, cumsum(group_sizes))
-
 X_sorted <- X_sorted[, !colnames(X_sorted) %in% c("rv1", "rv2"), drop = FALSE]
-
 result = Comp(X=X_sorted,Y=Y_sorted,SSC=SCC,groupsize=group_sizes,n=1e3,setted_cluster=50)
 result
 

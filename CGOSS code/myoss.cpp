@@ -29,14 +29,16 @@ arma::vec lev(const arma::mat& X) {
 }
 
 
-
 // [[Rcpp::export]]
 arma::vec bottom_k(arma::vec x, unsigned int k) {
-  arma::vec x2 = x; // save a copy of x
-  arma::vec ind(k); // save the indexes of the smallest k numbers
-  std::nth_element(x.begin(), x.begin() + k - 1, x.end()); // std::greater<double>());
+  if (k == 0) return arma::vec(); 
+  // ===================
+  
+  arma::vec x2 = x; 
+  arma::vec ind(k); 
+  std::nth_element(x.begin(), x.begin() + k - 1, x.end()); 
   for(int ii=0, i=0; i<int(x.n_elem) && ii<int(k); i++){
-    if(x2[i] <= x[k-1])  ind[ii++] = i;  // +1 for R
+    if(x2[i] <= x[k-1])  ind[ii++] = i; 
   }
   return ind;
 }
