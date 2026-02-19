@@ -381,7 +381,7 @@ Comp=function(N,p, R, Var.e, nloop, n_all, dist_x="case1", dist_a="NaN",groupsiz
       if (k%/%100 == k/100) cat(k, "-")
       itr <- itr+1
       set.seed(k* 100000)
-      if(dist_a == "N.ori") {Var.a = 0.5; Fa = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C)}
+      if(dist_a == "N.ori") {Var.a = 2.25; Fa = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C)}
       if(dist_a == "N.ML") { Var.a <- 0; Fa <- 0 }
       if(dist_a == "N.large") {Var.a = 100; Fa = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C)}
       if(dist_a=="T"){Var.a = 3;Fa = rep(rt(R,3), C)}
