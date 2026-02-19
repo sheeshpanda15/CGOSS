@@ -1,19 +1,18 @@
 #This R code shows the comparison between different subsample methods on simulated full dataset.
-#People can choose 4 types of generated dataset from CASE1-CASE4 by "CASE" in line 23
-#People can also choose 3 different setting of random effect: N.ori, N.ML, T by "modeltype" to generate the dataset.
-#People can use "large" or "small" to control the differences between the size of generated groups.
-#People can use "setted_cluster" to control the cluster number we choose in the algorithm.
+#People can choose 4 types of generated dataset from CASE1-CASE4
+#People can also choose 3 different setting of random effect: N.ori, N.ML, N.large to generate the dataset.
+#People can use "large" or "small" to control the differences between the size of generated groups
 
 
-#The function Comp is the main function that do the comparison between 5 subsample methods. 
+#The function Comp is the main function that do the comparison between 5 subsample method. 
 #People can change the value of "n" to have different size of subsample set.
-
+#People can change the value of "obj.c" to choose different setting of the objective function.
 
 #We use CPP to help speed up the code. People must put 'myoss.cpp','lmm_fast.cpp' to the environment.
 
 
 
-#######################
+
 rm(list=ls())
 library(devtools)
 library(ClusterR)
@@ -21,7 +20,7 @@ library(MASS)
 Rcpp::sourceCpp('myoss.cpp')
 Rcpp::sourceCpp("lmm_fast.cpp")
 
-filename<-CASE<-"case1"
+filename<-"case4"
 
 iboss=function(x,k){
   ind=NULL
@@ -44,54 +43,115 @@ iboss=function(x,k){
 scalex=function(a){
   2*(a-min(a))/(max(a)-min(a))-1
 }
-MSPE_fn = function(fy, fx, sx, sy, beta, Var.a, Var.e, nc, C, R){
-  index <- 1
-  mv_hat <- c()
-  # 1. 基于训练结构计算随机效应
-  for (i in 1:R) {
-    if(i <= length(nc)){
-      current_indices <- index:(index + nc[i] - 1)
-      if(max(current_indices) <= length(sy)){
-        term1 <- Var.a / (Var.e + nc[i] * Var.a)
-        term2 <- sum((sy - cbind(1, sx) %*% beta)[current_indices])
-        mv_hat[i] <- term1 * term2
-        index <- index + nc[i]
-      } else {
-        mv_hat[i] <- 0
+find.sigma=function(xx, yy, beta, nc, R){
+  
+  eta.hat<-yy-cbind(1, xx)%*%beta
+  
+  b <- c()
+  Ue <- 0
+  for (i in 1:length(eta.hat)) {
+    b[i] <- sum((eta.hat[i]*rep(1,length(eta.hat)) - eta.hat)^2)/2
+    Ue <- Ue + b[i]
+  }
+  
+  if(length(which(nc==0))!=0){
+    nc <- nc[-which(nc==0)]
+  }
+  R.1 <- length(nc)
+  
+  e1 <- c()
+  for(j in 1:nc[1]) {
+    e1[j] <- sum((eta.hat[1:nc[1]][j]*rep(1,nc[1]) - eta.hat[1:nc[1]])^2)/(2*nc[1])
+  }
+  
+  
+  e <- c()
+  e[1] <- sum(e1)
+  
+  if (R.1 > 1) {  # 只有当R.1大于1时才执行循环
+    for (i in 2:R.1) {
+      e2 <- c()
+      for (j in 1:nc[i]) {
+        e2[j] <- sum((eta.hat[(sum(nc[1:(i-1)]) + j)]*rep(1,nc[i]) - eta.hat[(sum(nc[1:(i-1)]) + 1):sum(nc[1:i])])^2)/(2*nc[i])
       }
-    } else {
-      mv_hat[i] <- 0
+      e[i] <- sum(e2)
     }
   }
   
-  # 2. 比例投影：按比例放大 nc 以适应测试集大小
-  # 我们根据 nc 的比例构造一个新的 C 向量 (C_projected)
   
-  N_test <- length(fy)          # 测试集的总样本量
-  valid_nc <- nc[1:R]           # 确保我们只取对应于 R 个估计效应的组大小
-  
-  # 计算比例
-  props <- valid_nc / sum(valid_nc)
-  
-  # 将这些比例投影到测试集大小
-  C_projected <- floor(props * N_test)
-  
-  # 3. 修正舍入误差
-  # 由于使用了 floor()，总和可能略小于 N_test。
-  # 我们将余数分配给前几个组，以确保长度完全匹配。
-  remainder <- N_test - sum(C_projected)
-  if(remainder > 0){
-    C_projected[1:remainder] <- C_projected[1:remainder] + 1
+  Ua <- sum(e)
+  NF <- sum(nc)
+  NS <- sum(nc^2)
+  Var.e <- Ua/(NF-R)
+  if((NF^2-NS)==0){
+    Var.a=0
+  }else{
+    Var.a <- Ue/(NF^2-NS) -  Ua*(NF^2 - NF)/((NF^2 - NS)*(NF-R))
+  }
+  if (Var.a < 0) {
+    Var.a <- 0
   }
   
-  # 4. 预测
-  # 现在 sum(C_projected) == length(fy)，所以 rep() 可以完美运行
-  y_hat <- cbind(1, fx)%*%beta + rep(mv_hat, times=C_projected)
   
-  mspe <- mean((fy - y_hat)^2)
-  return(mspe)
+  
+  
+  return(list(Var.a,Var.e))
 }
-MSPE_tru=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
+find.beta=function(xx, yy, Var.a, Var.e, nc, R, p){
+  if(length(which(nc==0))!=0){
+    nc <- nc[-which(nc==0)]
+  }
+  R.1 <- length(nc)
+  sn <- c(0, cumsum(nc))
+  
+  
+  XVX <- matrix(0, p+1, p+1)
+  XVY <- matrix(0, p+1, 1)
+  
+  for (i in 1:R.1){
+    gamma <- (nc[i]*Var.a)/(Var.e+nc[i]*Var.a)
+    inv.V <- (1/Var.e)*(diag(1,(nc[i]))-(gamma/(nc[i]))*matrix(1,(nc[i]),(nc[i])))
+    if(nc[i] ==1){
+      XVX <- XVX + t(cbind(1,t(xx[(sn[i]+1):(sn[i+1]),])))%*%inv.V%*%cbind(1,t(xx[(sn[i]+1):(sn[i+1]),]))
+      XVY <- XVY + t(cbind(1,t(xx[(sn[i]+1):(sn[i+1]),])))%*%inv.V%*%yy[(sn[i]+1):(sn[i+1])]
+    }else{
+      XVX <- XVX + t(cbind(1,xx[(sn[i]+1):(sn[i+1]),]))%*%inv.V%*%cbind(1,xx[(sn[i]+1):(sn[i+1]),])
+      XVY <- XVY + t(cbind(1,xx[(sn[i]+1):(sn[i+1]),]))%*%inv.V%*%yy[(sn[i]+1):(sn[i+1])]
+    }
+  }
+  
+  
+  if (det(XVX) == 0) {
+    cat("Nonsingular")
+  }
+  
+  bt<-solve(XVX)%*%XVY
+  
+  return(bt)
+}
+Est_hat=function(xx, yy, beta, Var.a, Var.e, nc, R, p){
+  
+  beta0 <- as.matrix(lm(yy ~ xx)$coefficients)
+  
+  sigma.hat0 <- find_sigma_cpp(xx, yy, beta0, nc, R)
+  
+  beta1 <- find_beta_cpp(xx, yy, sigma.hat0[[1]],sigma.hat0[[2]], nc, R, p)
+  
+  sigma.hat1 <- find_sigma_cpp(xx, yy, beta1, nc, R)
+  
+  
+  beta2 <- find_beta_cpp(xx, yy, sigma.hat1[[1]], sigma.hat1[[2]], nc, R, p)
+  
+  
+  bt.mse <- sum((beta2[-1]-beta)^2)
+  sigma.hat2 <- find_sigma_cpp(xx, yy, beta2, nc, R)
+  bt0.mse <- (beta2[1] - 1)^2
+  va.mse <- sum((sigma.hat2[[1]] - Var.a)^2)
+  ve.mse <- sum((sigma.hat2[[2]] - Var.e)^2)
+  
+  return(list(bt.mse, va.mse, ve.mse, bt0.mse, beta2, sigma.hat2[[1]], sigma.hat2[[2]]))
+}
+MSPE_fn=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
   index <- 1
   mv_hat <- c()
   for (i in 1:R) {
@@ -99,28 +159,10 @@ MSPE_tru=function(fy,fx, sx, sy, beta, Var.a, Var.e, nc,C, R){
     index <- index + nc[i]
   }
   
+  
   y_hat <- cbind(1, fx)%*%beta + rep(mv_hat, C)
   mspe <- mean((fy - y_hat)^2)
   
-  return(mspe)
-}
-MSPE_CGOSS_Match = function(fy_test, fx_test, sx_train, sy_train, beta_hat, Var.a, Var.e, nc_train, centroids){
-  R <- length(nc_train)
-  mv_hat <- numeric(R)
-  index <- 1
-  fixed_pred_train <- cbind(1, sx_train) %*% beta_hat
-  for (i in 1:R) {
-    current_indices <- index:(index + nc_train[i] - 1)
-    residuals_i <- sy_train[current_indices] - fixed_pred_train[current_indices]
-    term1 <- Var.a / (Var.e + nc_train[i] * Var.a)
-    term2 <- sum(residuals_i)
-    mv_hat[i] <- term1 * term2
-    index <- index + nc_train[i]
-  }
-  pred_labels <- ClusterR::predict_KMeans(fx_test, centroids)
-  u_assigned <- mv_hat[pred_labels]
-  y_hat <- cbind(1, fx_test) %*% beta_hat + u_assigned
-  mspe <- mean((fy_test - y_hat)^2)
   return(mspe)
 }
 generate_groups <- function(R, m, N,V) {
@@ -152,19 +194,25 @@ generate_groups <- function(R, m, N,V) {
   
   return(result)
 }
+assign_clusters <- function(data, centroids) {
+  cluster_assignments <- numeric(nrow(data))
+  for (i in 1:nrow(data)) {
+    distances <- apply(centroids, 1, function(centroid) sum((data[i, ] - centroid) ^ 2))
+    cluster_assignments[i] <- which.min(distances)
+  }
+  
+  return(cluster_assignments)
+}
 mbky <- function(setseed, FXX, y, n, Cn) {
   set.seed(setseed)
   
   repeat {
-    mini_batch_kmeans <- ClusterR::MiniBatchKmeans(FXX, clusters = Cn, batch_size = 4096, 
-                                                   num_init = 3, max_iters = 5, 
-                                                   initializer = 'kmeans++')
-    
-    batchs <- ClusterR::predict_KMeans(FXX, mini_batch_kmeans$centroids)
-    
+    mini_batch_kmeans <- MiniBatchKmeans(FXX, clusters = Cn, batch_size = n, num_init = 3, max_iters = 5, initializer = 'kmeans++')
+    centroids <- mini_batch_kmeans$centroids
+    batchs <- assign_clusters(FXX, centroids)
     cluster_sizes <- table(batchs)
-    threshold <- n / Cn
     
+    threshold <- n / Cn
     if (any(cluster_sizes < threshold)) {
       Cn <- Cn - 1  
     } else {
@@ -172,19 +220,78 @@ mbky <- function(setseed, FXX, y, n, Cn) {
     }
   }
   
-  R_CGOSS <- length(cluster_sizes)
-  sort_idx <- order(batchs)
-  
-  data_matrix_sorted <- FXX[sort_idx, , drop = FALSE]
-  sorted_y <- y[sort_idx]
-  sorted_indices <- (1:nrow(FXX))[sort_idx]
-  cluster_sizes_vector <- as.vector(table(batchs[sort_idx]))
+  R_CGOSS = length(cluster_sizes)
+  original_indices <- 1:nrow(FXX)
+  data_with_cluster <- data.frame(FXX, y = y, cluster = batchs, original_index = original_indices)
+  data_sorted <- data_with_cluster[order(data_with_cluster$cluster), ]
+  data_matrix_sorted <- as.matrix(data_sorted[, !(names(data_sorted) %in% c("row.names", "cluster", "original_index", "y")), drop = FALSE])
+  sorted_y <- data_sorted$y
+  cluster_sizes <- table(data_sorted$cluster)
+  cluster_sizes_vector <- as.vector(cluster_sizes)
+  sorted_indices <- data_sorted$original_index
   return(list(R_CGOSS = R_CGOSS, 
               data_matrix_sorted = data_matrix_sorted, 
               sorted_y = sorted_y, 
               cluster_sizes_vector = cluster_sizes_vector, 
-              sorted_indices = sorted_indices,
-              centroids = mini_batch_kmeans$centroids)) 
+              sorted_indices = sorted_indices))
+}
+count.info=function(xx,yy,nc,R,p){
+  xx <- apply(xx, 2, scalex)
+  
+  if(length(nc)==1){
+    X <- model.matrix(~ xx)
+    model <- lm(yy ~ xx)
+    residuals <- resid(model)
+    RSS <- sum(residuals^2)
+    Var.lm<-RSS/(nrow(X)-p-1)
+    D<-det(t(X) %*% X)/(Var.lm^p)
+    A <- Var.lm*sum(diag(solve( t(X) %*% X)) )
+  }
+  else{
+    
+    
+    
+    beta0 <- as.matrix(lm(yy ~ xx)$coefficients)
+    sigma.hat0 <- find_sigma_cpp(xx, yy, beta0, nc, R)
+    beta1 <- find_beta_cpp(xx, yy, sigma.hat0[[1]],sigma.hat0[[2]], nc, R, p)
+    sigma.hat1 <- find_sigma_cpp(xx, yy, beta1, nc, R)
+    beta2 <- find_beta_cpp(xx, yy, sigma.hat1[[1]], sigma.hat1[[2]], nc, R, p)
+    sigma.hat2 <- find_sigma_cpp(xx, yy, beta2, nc, R)
+    
+    Var.a<-sigma.hat2[[1]]
+    Var.e<-sigma.hat2[[2]]
+    if(length(which(nc==0))!=0){
+      nc <- nc[-which(nc==0)]
+    }
+    R.1 <- length(nc)
+    sn <- c(0, cumsum(nc))
+    
+    
+    XVX <- matrix(0, p+1, p+1)
+    for (i in 1:R.1){
+      
+      gamma <- (nc[i]*Var.a)/(Var.e+nc[i]*Var.a)
+      inv.V <- (1/Var.e)*(diag(1,(nc[i]))-(gamma/(nc[i]))*matrix(1,(nc[i]),(nc[i])))
+      
+      if (any(is.nan(inv.V)) || any(is.infinite(inv.V))) {
+        cat("inv.V  NaN or
+            Inf\n")
+      }
+      
+      if(nc[i] ==1){
+        XVX <- XVX + t(cbind(1,t(xx[(sn[i]+1):(sn[i+1]),])))%*%inv.V%*%cbind(1,t(xx[(sn[i]+1):(sn[i+1]),]))
+      }else{
+        XVX <- XVX + t(cbind(1,xx[(sn[i]+1):(sn[i+1]),]))%*%inv.V%*%cbind(1,xx[(sn[i]+1):(sn[i+1]),])
+      }
+      
+    }
+    
+    D<-det(XVX)
+    A<-sum(diag( solve(XVX) ))
+  }
+  
+  
+  return(c(D,A))
 }
 findsubforCGOSS<-function(n,R){
   if (n %% R != 0) {
@@ -204,7 +311,6 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   FXXXX <- cluster$data_matrix_sorted
   FYYY<- cluster$sorted_y
   SCC <- c(0, cumsum(cluster$cluster_sizes_vector))
-  
   mcgoss<-findsubforCGOSS(n,R_CGOSS)
   index.CGOSS <- integer(0) 
   for (i in 1:(length(SCC) - 1)) {
@@ -213,13 +319,7 @@ GOSS<-function(setseed,FXX,FY,n,Cn,p){
   }
   index_CGOSS_interation <- cluster$sorted_indices[index.CGOSS]
   ncCGOSS <- mcgoss
-  return(list(index = index_CGOSS_interation,
-              R = R_CGOSS,
-              nc = ncCGOSS,
-              C=cluster$cluster_sizes_vector,
-              FX=FXXXX,
-              FY=FYYY,
-              centroids = cluster$centroids))
+  return(list(index = index_CGOSS_interation,R = R_CGOSS,nc = ncCGOSS,C=cluster$cluster_sizes_vector,FX=FXXXX,FY=FYYY))
 }
 MSE_LM<-function(xx,yy,beta){
   p<-ncol(xx)
@@ -233,13 +333,12 @@ MSPE_LM<-function(xx,yy,beta){
   y.est<-cbind(1,xx)%*%beta
   mspe<- mean((yy-y.est)^2)
 }
-Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groupsize,setted_cluster=10){
+Comp=function(N,p, R, Var.e, nloop, n_all, dist_x="case1", dist_a="NaN",groupsize,setted_cluster=10,anneal){
   big_column_vector<-c()
   beta=rep(1, p)
-  m=ceiling(n / R)
   sigma=diag(0.5,p,p)+matrix(0.5,p,p)
   #sigma=diag(1,p,p)
-  lrs=length(N_all)
+  lrs=length(n_all)
   names=c("CGOSS.bt.mat",  "IBOSS.bt.mat", "OSS.bt.mat", 
           "knowGOSS.bt.mat", "GOSS.bt.mat","GIBOSS.bt.mat","knowGIBOSS.bt.mat",
           "CGOSS.pred",  "IBOSS.pred", "OSS.pred", 
@@ -271,7 +370,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
     meanR=0
     for (k in 1:nloop) {
       
-      N<-N_all[j]
+      n<-n_all[j]
+      m=ceiling(n / R)
       random_numbers <- generate_groups(R,m,N,groupsize)
       C <- round(random_numbers)
       SC = c(0, cumsum(C))
@@ -281,7 +381,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       if (k%/%100 == k/100) cat(k, "-")
       itr <- itr+1
       set.seed(k* 100000)
-      if(dist_a == "N.ori") {Var.a = 2.25; Fa = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C)}
+      if(dist_a == "N.ori") {Var.a = 0.5; Fa = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C)}
       if(dist_a == "N.ML") { Var.a <- 0; Fa <- 0 }
       if(dist_a == "N.large") {Var.a = 100; Fa = rep(rnorm(R, mean = 0, sd = sqrt(Var.a)), C)}
       if(dist_a=="T"){Var.a = 3;Fa = rep(rt(R,3), C)}
@@ -303,7 +403,11 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
         if(dist_x=="case4") {FXX[(SC[i] + 1):(SC[i+1]),]=mvrnorm(C[i], rep(-2+(i-1)/5, p), sigma) }
         index.knowGOSS <- c(index.knowGOSS, OAJ2_cpp(apply(FXX[(SC[i] + 1):(SC[i+1]),],2,scalex),m, tPow=2) + SC[i])
         index.knowGIBOSS <- c(index.knowGIBOSS, iboss(FXX[(SC[i] + 1):(SC[i+1]),],m) + SC[i])
+        
         Fori <- FXX
+        
+        
+        
       }
       
       
@@ -332,15 +436,18 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       nc <- rep(m,R)
       
       
+      
       ########################################## OSS
+      time.start<-Sys.time()
       nc2 <- c()
       index.OSS <- sort(OAJ2_cpp(apply(FXX,2,scalex),n, tPow=2))
       for (i in 1:R) {
         nc.OSS <- which(index.OSS >= (SSC[i] + 1) & index.OSS <= (SSC[i+1]))
         nc2[i] <- length(nc.OSS)
       }
-      
-      
+      time.end<-Sys.time()
+      time.OSS<-as.numeric(difftime(time.end, time.start, units = "secs"))
+      print(time.OSS)
       #########################CGOSS###########################################################################
       
       time.start<-Sys.time()
@@ -351,13 +458,13 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       C.CGOSS     <- informat$C
       R_CGOSS     <- informat$R
       FX.opt      <- informat$FX
-      centroids_CGOSS <- informat$centroids
       FY.opt     <- informat$FY
       time.end<-Sys.time()
       time.CGOSS<-time.CGOSS+as.numeric(difftime(time.end, time.start, units = "secs"))
       print(time.CGOSS)
       print(R_CGOSS)
       meanR<-meanR+R_CGOSS
+      
       
       
       ############################################## IBOSS
@@ -388,7 +495,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       knowGOSS.Est <- Est_hat_cpp(xx=Fori[index.knowGOSS,], yy=FYori[index.knowGOSS,], 
                                   beta, Var.a, Var.e, nc, R, p)
-      knowGOSS.pred[,itr] <- MSPE_tru(FYori, Fori, Fori[index.knowGOSS,], FYori[index.knowGOSS,], 
+      knowGOSS.pred[,itr] <- MSPE_fn(FYori, Fori, Fori[index.knowGOSS,], FYori[index.knowGOSS,], 
                                      knowGOSS.Est[[5]], knowGOSS.Est[[6]], knowGOSS.Est[[7]], nc,C, R)
       knowGOSS.bt.mat[,itr] <- knowGOSS.Est[[1]]
       knowGOSS.Var.a[,itr]<- knowGOSS.Est[[2]]
@@ -420,29 +527,23 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
       
       
       
-      knowGIBOSS.pred[,itr] <- MSPE_tru(FYori, Fori, Fori[index.knowGIBOSS,], FYori[index.knowGIBOSS,], 
+      knowGIBOSS.pred[,itr] <- MSPE_fn(FYori, Fori, Fori[index.knowGIBOSS,], FYori[index.knowGIBOSS,], 
                                        knowGIBOSS.Est[[5]], knowGIBOSS.Est[[6]], knowGIBOSS.Est[[7]], nc,C, R)
       knowGIBOSS.bt.mat[,itr] <- knowGIBOSS.Est[[1]]
       knowGIBOSS.Var.a[,itr]<- knowGIBOSS.Est[[2]]
       knowGIBOSS.Var.e[,itr]<- knowGIBOSS.Est[[3]]
       knowGIBOSS.bt0.dif[,itr] <- knowGIBOSS.Est[[4]]
       knowGIBOSS.bt[,itr] <- knowGIBOSS.Est[[5]]
-
+      
+      
+      
       ############################################################# estimate CGOSS
+      
       
       CGOSS.Est <- Est_hat_cpp(xx=FXX[final_index_CGOSS,], yy=FY[final_index_CGOSS,], 
                                beta, Var.a, Var.e, ncCGOSS, R_CGOSS, p)
-      CGOSS.pred[,itr]  <- MSPE_CGOSS_Match(
-        fy_test = FYori,                
-        fx_test = Fori,                 
-        sx_train = FXX[final_index_CGOSS,], 
-        sy_train = FY[final_index_CGOSS,], 
-        beta_hat = CGOSS.Est[[5]],      
-        Var.a = CGOSS.Est[[6]],         
-        Var.e = CGOSS.Est[[7]],         
-        nc_train = ncCGOSS,             
-        centroids = centroids_CGOSS     
-      )
+      CGOSS.pred[,itr]  <- MSPE_fn(FY.opt,FX.opt , FXX[final_index_CGOSS,], FY[final_index_CGOSS,], 
+                                   CGOSS.Est[[5]], CGOSS.Est[[6]], CGOSS.Est[[7]], ncCGOSS,C.CGOSS, R_CGOSS)
       CGOSS.bt.mat[,itr] <- CGOSS.Est[[1]]
       CGOSS.Var.a[,itr]<- CGOSS.Est[[2]]
       CGOSS.Var.e[,itr]<- CGOSS.Est[[3]]
@@ -511,6 +612,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     mse.CGOSS.Var.a <- c(mse.CGOSS.Var.a, mean(CGOSS.Var.a[,loc]))
+    #mse.iboss.Var.a <- c(mse.iboss.Var.a, mean(IBOSS.Var.a[,loc]))
+    #mse.oss.Var.a <- c(mse.oss.Var.a, mean(OSS.Var.a[,loc]))
     mse.knowGOSS.Var.a <- c(mse.knowGOSS.Var.a, mean(knowGOSS.Var.a[,loc]))
     mse.Goss.Var.a <- c(mse.Goss.Var.a, mean(GOSS.Var.a[,loc]))
     mse.GIBOSS.Var.a <- c(mse.GIBOSS.Var.a, mean(GIBOSS.Var.a[,loc]))
@@ -525,6 +628,8 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   for (i in 1:lrs) {
     loc <- ((i-1)*nloop+1):(i*nloop)
     mse.CGOSS.Var.e <- c(mse.CGOSS.Var.e, mean(CGOSS.Var.e[,loc]))
+    #mse.iboss.Var.e <- c(mse.iboss.Var.e, mean(IBOSS.Var.e[,loc]))
+    #mse.oss.Var.e <- c(mse.oss.Var.e, mean(OSS.Var.e[,loc]))
     mse.knowGOSS.Var.e <- c(mse.knowGOSS.Var.e, mean(knowGOSS.Var.e[,loc]))
     mse.Goss.Var.e <- c(mse.Goss.Var.e, mean(GOSS.Var.e[,loc]))
     mse.GIBOSS.Var.e <- c(mse.GIBOSS.Var.e, mean(GIBOSS.Var.e[,loc]))
@@ -569,7 +674,7 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
   
   rec5 <- cbind(mse.bt0.CGOSS, mse.bt0.iboss, mse.bt0.oss, mse.bt0.knowGOSS, mse.bt0.Goss,mse.bt0.GIBOSS,mse.bt0.knowGIBOSS)
   
-  save(rec1, rec2, rec3, rec4, rec5, file = paste0(dist_a,"_", dist_x,".Rdata"))
+  save(rec1, rec2, rec3, rec4, rec5, file = paste0("different_n",dist_a,"_", dist_x,".Rdata"))
   
   return(list(rec1,rec2,rec3,rec4,rec5))
 }
@@ -577,19 +682,19 @@ Comp=function(N_all,p, R, Var.e, nloop, n, dist_x="case1", dist_a="N.ori",groups
 #########################
 
 
-
-N=c(1e4,5e4,1e5)
+N=5e4
+n=c(1e3,5e3,1e4)
 modeltype="N.ori"
-result = Comp(N,p=50,R=20,Var.e=9,nloop=200,n=1e3,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=10)
+result = Comp(N,p=50,R=20,Var.e=9,nloop=200,n,dist_x =filename, dist_a=modeltype,groupsize="large",setted_cluster=10)
 result
 
 
 png(paste0(filename,"remake_mse_",modeltype,".png"),width=800,height = 600)
-plot(log10(N), log10(result[[1]][,1]), xlab=expression(log["10"](N)), ylab = expression(log["10"](MSE)), pch=1,lwd=2,
-     ylim=c(min(log10(result[[1]])), max(log10(result[[1]]))),xlim=c(min(log10(N)), max(log10(N))), type="o",main = "")
+plot(log10(n), log10(result[[1]][,1]), xlab=expression(log["10"](n)), ylab = expression(log["10"](MSE)), pch=1,lwd=2,
+     ylim=c(min(log10(result[[1]])), max(log10(result[[1]]))),xlim=c(min(log10(n)), max(log10(n))), type="o",main = "")
 pp <- dim(result[[1]])[2]
 for(i in 2:pp){
-  lines(log10(N), log10(result[[1]][,i]), type="o", pch=(i), lty=i, col=i,lwd=2)
+  lines(log10(n), log10(result[[1]][,i]), type="o", pch=(i), lty=i, col=i,lwd=2)
 }
 
 legend("topright", lty=1:pp, pch=(1:pp), col=1:pp,
@@ -599,11 +704,11 @@ dev.off()
 
 ###########################################
 png(paste0(filename,"remake_mspe_",modeltype,".png"),width=800,height = 600)
-plot(log10(N), log10(result[[4]][,1]), xlab=expression(log["10"](N)), ylab = expression(log["10"](MSPE)), pch=1,lwd=2,
-     ylim=c(min(log10(result[[4]])), max(log10(result[[4]]))),xlim=c(min(log10(N)), max(log10(N))), type="o",main = "")
+plot(log10(n), log10(result[[4]][,1]), xlab=expression(log["10"](n)), ylab = expression(log["10"](MSPE)), pch=1,lwd=2,
+     ylim=c(min(log10(result[[4]])), max(log10(result[[4]]))),xlim=c(min(log10(n)), max(log10(n))), type="o",main = "")
 pp <- dim(result[[4]])[2]
 for(i in 2:pp){
-  lines(log10(N), log10(result[[4]][,i]), type="o", pch=(i), lty=i, col=i,lwd=2)
+  lines(log10(n), log10(result[[4]][,i]), type="o", pch=(i), lty=i, col=i,lwd=2)
 }
 
 legend("topright", lty=1:pp, pch=(1:pp), col=1:pp,
