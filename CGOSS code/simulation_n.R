@@ -20,7 +20,7 @@ library(MASS)
 Rcpp::sourceCpp('myoss.cpp')
 Rcpp::sourceCpp("lmm_fast.cpp")
 
-filename<-"case3"
+filename<-"case1"
 
 iboss=function(x,k){
   ind=NULL
